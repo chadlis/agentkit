@@ -1,6 +1,7 @@
 """Fixtures that locate the public twin in a Hypotrail checkout. The kit copies none of its files (`docs/design.md`)."""
 
 import os
+import shutil
 from pathlib import Path
 
 import pytest
@@ -27,5 +28,6 @@ def workload_dir() -> Path:
 
 @pytest.fixture(autouse=True)
 def ledger_in_tmp(tmp_path, monkeypatch) -> None:
-    """The kit writes its ledger under the working directory: every test runs in its own, never in the repository."""
+    """The kit writes its ledger under the working directory and reads `budget.json` there: every test runs in its own, never in the repository, with a copy of the versioned budget."""
     monkeypatch.chdir(tmp_path)
+    shutil.copyfile(ROOT / "budget.json", tmp_path / "budget.json")

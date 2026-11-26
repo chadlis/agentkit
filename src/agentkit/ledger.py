@@ -76,8 +76,8 @@ def open_run(ledger_dir: Path, *, partition: str, adapter: str, configuration: d
     return run_id
 
 
-def refuse_run(ledger_dir: Path, *, partition: str, adapter: str, configuration: dict | None) -> str:
-    """Marks every record still `running` as `failed`, as `open_run` does, then appends a `refused` record, closed when written, with no pair. Returns its run id."""
+def refuse_run(ledger_dir: Path, *, partition: str, adapter: str, configuration: dict | None, reason: str | None = None) -> str:
+    """Marks every record still `running` as `failed`, as `open_run` does, then appends a `refused` record, closed when written, with no pair, and the `reason` when one is given. Returns its run id."""
     records = read_records(ledger_dir)
     fail_stale_runs(records)
     run_id = f"r-{len(records) + 1:04d}"
@@ -91,16 +91,19 @@ def refuse_run(ledger_dir: Path, *, partition: str, adapter: str, configuration:
         "start_time": time,
         "status": "refused",
         "end_time": time,
-    })
+    } | ({} if reason is None else {"reason": reason}))
     write_records(ledger_dir, records)
     return run_id
 
 
-def close_run(ledger_dir: Path, run_id: str, status: str = "completed") -> None:
+def close_run(ledger_dir: Path, run_id: str, status: str = "completed", reason: str | None = None) -> None:
+    """Closes the run; a run the harness stops before its last pair is `failed` with the `reason` it stopped for."""
     records = read_records(ledger_dir)
     record = next(item for item in records if item["run_id"] == run_id)
     record["status"] = status
     record["end_time"] = now()
+    if reason is not None:
+        record["reason"] = reason
     write_records(ledger_dir, records)
 
 
@@ -113,12 +116,13 @@ def record_answer(ledger_dir: Path, run_id: str, case_id: str, repeat: int, fiel
 
 
 def closed_run(ledger_dir: Path, run_id: str) -> tuple[dict, dict[tuple[str, int], dict | None]]:
-    """The `completed` record `run_id` and the answers it recorded, by pair; any other status is refused."""
+    """The record `run_id` and the answers it recorded, by pair: a `completed` run, or a `failed` one the harness closed with a reason. Any other run is refused."""
     record = next((item for item in read_records(ledger_dir) if item["run_id"] == run_id), None)
     if record is None:
         raise LedgerError(f"no run {run_id!r} in {runs_file(ledger_dir)}")
-    if record["status"] != "completed":
-        raise LedgerError(f"run {run_id} is {record['status']}, not completed: only a closed run is exported")
+    stopped = record["status"] == "failed" and record.get("reason") is not None
+    if record["status"] != "completed" and not stopped:
+        raise LedgerError(f"run {run_id} is {record['status']}, not completed nor stopped by the harness with a reason: only a closed run is exported")
     path = answers_file(ledger_dir, run_id)
     try:
         rows = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]

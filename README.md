@@ -6,22 +6,24 @@ It runs on a public twin only: the Chinook prose Workload (`chinook_prose`) of c
 
 ## Status
 
-Under construction. `agentkit run` runs the `scripted` adapter on the dev set, counted in the run ledger before its first call; `agentkit export` writes the files `import agent` reads from a closed ledger run; `agentkit status` prints the runs per set and per status. The held-out set (`public_check`) is refused outside the evaluator entry point: exit 9 and a ledger record `refused`, a guard in code and not a wall (`docs/design.md`, section 3). The budget, the live adapter, the decision log, the conductor and the evaluator job are planned in the slice issue and its tickets.
+Under construction. `agentkit run` runs the `scripted` adapter on the dev set, counted in the run ledger before its first call; `agentkit export` writes the files `import agent` reads from a closed ledger run; `agentkit status` prints the runs per set and per status. The held-out set (`public_check`) is refused outside the evaluator entry point: exit 9 and a ledger record `refused`, a guard in code and not a wall (`docs/design.md`, section 3). Every run is checked against `budget.json` before it spends: a run that would exceed a limit exits 8 with a ledger record `refused`. The `live` adapter (Anthropic, opt-in) needs `--live`, `--model`, a key in `AGENTKIT_ANTHROPIC_API_KEY` and a price in `budget.json`, and stops at its ceiling; the versioned budget keeps it off (ceiling 0, no price). The decision log, the conductor and the evaluator job are planned in the slice issue and its tickets.
 
 ## Layout
 
 - `src/agentkit/`: the package. `cli.py` is the `agentkit` command.
   - `cases.py`: reads a Workload's Cases by Partition, never its References; the held-out Partition only under the evaluator entry point.
-  - `adapters/`: the assistant adapters, `scripted` (replays authored fixture answers, no model) and, later, `live` (opt-in, bounded).
+  - `adapters/`: the assistant adapters, `scripted` (replays authored fixture answers, no model) and `live` (calls an Anthropic model, opt-in, bounded by the live ceiling; tested with a fake client only).
+  - `budget.py`: reads `budget.json` of the working directory and checks dev runs, held-out readings per Configuration and the live ceiling before a run spends.
   - `harness.py`: runs an adapter over (Case, Repeat) pairs, with a ledger record `running` before the first call, closed after the last.
   - `ledger.py`: the run ledger, `ledger/runs.jsonl` of the working directory, one record per run, and the answers each run recorded under `ledger/answers/`. A run that crashes stays `running`; the next run marks it `failed`.
   - `rules.py`: the named decision rules, `keep-higher-dev-score@1` first.
-  - `export.py`: writes `answers.jsonl` and `population.json` for `import agent`, from a `completed` ledger run only.
+  - `export.py`: writes `answers.jsonl` and `population.json` for `import agent`, from a `completed` ledger run, or one the harness stopped at the live ceiling (its unreached pairs are `missing`, with the reason).
   - (planned) `decisions.py`: the decision log, with its `HUMAN` and `PROXY` marks.
   - (planned) `conductor.py`: the automatic loop on the dev set, under budget.
   - `evaluator.py`: the entry point of the evaluator job; it checks that it runs in a job of `evaluator.yml`. The job itself is planned.
-- `tests/`: offline tests; no network, no model call. `tests/e2e/test_dev_end_to_end.py` runs the export through Hypotrail's `init`, `import agent`, `assess`, `compare` and a proxy `decide`.
+- `tests/`: offline tests; no network, no model call (`test_offline.py` reruns the suite with every socket blocked). `tests/e2e/test_dev_end_to_end.py` runs the export through Hypotrail's `init`, `import agent`, `assess`, `compare` and a proxy `decide`.
 - `.github/workflows/`: `ci.yml` (pytest), `e2e.yml` (the whole suite against Hypotrail checked out at `hypotrail.pin`, or at `hypotrail_ref` when dispatched) and, later, `evaluator.yml` (the evaluator job, manual, in a protected environment).
+- `budget.json`: the kit's limits and model prices, raised only by a pull request that says why.
 - `hypotrail.pin`: the chadlis/hypotrail commit the kit is tested against.
 - `contracts/`: the file formats shared with Hypotrail and mlkit (JSON Schemas and examples), the copied ones pinned in `contracts.lock.json`; their changes in `docs/contracts/CHANGELOG.md`.
 - `docs/design.md`: the bricks, the contract with Hypotrail, the wall, the decision log, the budget, the stops, and the two modes.
@@ -39,7 +41,7 @@ hypotrail import agent --study STUDY --source answers.jsonl --population populat
 hypotrail assess / compare / report
 ```
 
-`agentkit export` given the options of `run` instead of `--run` makes a new run and exports it. Exporting a run that is not `completed` is refused (exit 2).
+`agentkit export` given the options of `run` instead of `--run` makes a new run and exports it. Exporting any other run (a crashed or refused one) is refused (exit 2).
 
 The scripted run's `settings` are the map each line of its fixture declares; a fixture whose lines declare different maps is refused (exit 2).
 

@@ -1,25 +1,32 @@
 """The `agentkit` command. The run ledger is `ledger/` of the working directory."""
 
 import argparse
+import os
 import sys
 from pathlib import Path
 
-from agentkit import harness, ledger
+from agentkit import budget, harness, ledger
+from agentkit.adapters import live
 from agentkit.adapters.scripted import ScriptedAdapter
 from agentkit.cases import WorkloadError
 from agentkit.evaluator import HeldOutRefused
 from agentkit.export import export
 
 EXIT_INVALID_INPUT = 2
+EXIT_BUDGET = 8
 EXIT_HELD_OUT_REFUSED = 9
-RUN_OPTIONS = ("workload_dir", "partition", "adapter", "fixture")
+RUN_OPTIONS = ("workload_dir", "partition", "adapter")
+ADAPTER_OPTIONS = ("fixture", "model")
+INVALID = (WorkloadError, ledger.LedgerError, budget.BudgetError)
 
 
 def add_run_options(parser: argparse.ArgumentParser, required: bool) -> None:
     parser.add_argument("--workload-dir", required=required, type=Path, metavar="DIR", help="the Workload directory of a Hypotrail checkout (for example hypotrail/examples/chinook_prose)")
     parser.add_argument("--set", required=required, choices=["dev", "public_check"], dest="partition", help="the Partition to run; the held-out set (public_check) is refused with exit 9 outside the evaluator job")
-    parser.add_argument("--adapter", required=required, choices=["scripted"], help="scripted: replays the answers of an authored fixture, with no model")
-    parser.add_argument("--fixture", required=required, metavar="NAME", help="the fixture the scripted adapter replays: fixtures/answers-NAME.jsonl of the Workload")
+    parser.add_argument("--adapter", required=required, choices=["scripted", "live"], help="scripted: replays the answers of an authored fixture, with no model; live: calls a model, opt-in and bounded by budget.json")
+    parser.add_argument("--fixture", metavar="NAME", help="scripted only: the fixture it replays, fixtures/answers-NAME.jsonl of the Workload")
+    parser.add_argument("--model", metavar="ID", help="live only: the Anthropic model id; there is no default")
+    parser.add_argument("--live", action="store_true", help="live only: allow paid model calls, under the ceiling of budget.json")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -44,8 +51,22 @@ def build_parser() -> argparse.ArgumentParser:
 def _start(args: argparse.Namespace) -> str:
     # Before the adapter is built: a held-out run is refused even when its fixture cannot be read, and records no configuration.
     harness.refuse_held_out(args.partition, args.adapter, None)
-    adapter = ScriptedAdapter(args.workload_dir / "fixtures" / f"answers-{args.fixture}.jsonl")
+    if args.adapter == live.NAME:
+        if args.fixture is not None:
+            raise WorkloadError("--fixture is for the scripted adapter")
+        limits = budget.load()
+        adapter = live.build(live=args.live, model=args.model, environ=os.environ, ceiling=limits.live, price_of=limits.price)
+    else:
+        if args.fixture is None or args.model is not None or args.live:
+            raise WorkloadError("the scripted adapter needs --fixture, and takes neither --model nor --live")
+        adapter = ScriptedAdapter(args.workload_dir / "fixtures" / f"answers-{args.fixture}.jsonl")
     return harness.run(args.workload_dir, args.partition, adapter)
+
+
+def _stopped(run_id: str) -> str | None:
+    """The reason the harness stopped run `run_id` before its last pair, or None."""
+    record = next(item for item in ledger.read_records() if item["run_id"] == run_id)
+    return record.get("reason") if record["status"] == "failed" else None
 
 
 def _run(args: argparse.Namespace) -> int:
@@ -54,20 +75,27 @@ def _run(args: argparse.Namespace) -> int:
     except HeldOutRefused as error:
         print(f"refused: {error}", file=sys.stderr)
         return EXIT_HELD_OUT_REFUSED
-    except (WorkloadError, ledger.LedgerError) as error:
+    except budget.BudgetRefused as error:
+        print(f"refused by the budget ({error.reason}): {error}", file=sys.stderr)
+        return EXIT_BUDGET
+    except INVALID as error:
         print(f"invalid input: {error}", file=sys.stderr)
         return EXIT_INVALID_INPUT
+    reason = _stopped(run_id)
+    if reason is not None:
+        print(f"Run {run_id} stopped at the live ceiling ({reason}) and is recorded failed (in {ledger.runs_file(ledger.LEDGER_DIR)})", file=sys.stderr)
+        return EXIT_BUDGET
     print(f"Run {run_id} completed (in {ledger.runs_file(ledger.LEDGER_DIR)})")
     return 0
 
 
 def _export(args: argparse.Namespace) -> int:
     given = [name for name in RUN_OPTIONS if getattr(args, name) is not None]
-    if args.run is not None and given:
-        print("invalid input: --run exports an existing run and takes none of --workload-dir, --set, --adapter, --fixture", file=sys.stderr)
+    if args.run is not None and (given or args.live or any(getattr(args, name) is not None for name in ADAPTER_OPTIONS)):
+        print("invalid input: --run exports an existing run and takes none of --workload-dir, --set, --adapter, --fixture, --model, --live", file=sys.stderr)
         return EXIT_INVALID_INPUT
     if args.run is None and len(given) != len(RUN_OPTIONS):
-        print("invalid input: give --run, or all of --workload-dir, --set, --adapter, --fixture", file=sys.stderr)
+        print("invalid input: give --run, or all of --workload-dir, --set, --adapter and the adapter's options", file=sys.stderr)
         return EXIT_INVALID_INPUT
     try:
         run_id = args.run if args.run is not None else _start(args)
@@ -75,7 +103,10 @@ def _export(args: argparse.Namespace) -> int:
     except HeldOutRefused as error:
         print(f"refused: {error}", file=sys.stderr)
         return EXIT_HELD_OUT_REFUSED
-    except (WorkloadError, ledger.LedgerError) as error:
+    except budget.BudgetRefused as error:
+        print(f"refused by the budget ({error.reason}): {error}", file=sys.stderr)
+        return EXIT_BUDGET
+    except INVALID as error:
         print(f"invalid input: {error}", file=sys.stderr)
         return EXIT_INVALID_INPUT
     print(f"Exported run {run_id}: {counts.total()} lines ({counts['produced']} produced, {counts['failed']} failed, {counts['missing']} missing) to {args.out}")

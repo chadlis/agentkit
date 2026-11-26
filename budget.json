@@ -1,0 +1,7 @@
+{
+  "reason": "First limits (chadlis/agentkit#5). Live spending is off: the live ceiling is 0 and no model has a price, so every live run is refused until a pull request raises them with its reason.",
+  "dev_runs": 50,
+  "held_out_readings": 1,
+  "live": {"calls": 0, "tokens": 0, "usd": 0},
+  "prices": {}
+}
