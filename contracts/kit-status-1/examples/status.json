@@ -1,0 +1,33 @@
+{
+  "schema_version": "kit-status/1",
+  "kit_commit": "0000000000000000000000000000000000000000",
+  "frame_digest": null,
+  "budget": {
+    "dev_runs": {
+      "allowed": 10,
+      "spent": 3
+    },
+    "held_out_readings": {
+      "allowed": 1,
+      "spent": 0
+    }
+  },
+  "runs": {
+    "dev": {
+      "completed": 3,
+      "failed": 0,
+      "refused": 1
+    }
+  },
+  "open_stops": [],
+  "gate": null,
+  "decisions": [
+    {
+      "id": "K-0007",
+      "mark": "PROXY",
+      "level": "none",
+      "question": "Which Configuration goes to the held-out pass?",
+      "option": "concise"
+    }
+  ]
+}

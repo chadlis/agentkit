@@ -1,0 +1,124 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/chadlis/agentkit/contracts/kit-status-1/status.schema.json",
+  "title": "kit-status/1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "kit_commit",
+    "budget",
+    "runs",
+    "open_stops",
+    "gate",
+    "decisions"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "kit-status/1"
+    },
+    "kit_commit": {
+      "type": "string"
+    },
+    "frame_digest": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "budget": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "allowed",
+          "spent"
+        ],
+        "properties": {
+          "allowed": {
+            "type": "integer"
+          },
+          "spent": {
+            "type": "integer"
+          }
+        }
+      }
+    },
+    "runs": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": {
+          "type": "integer"
+        }
+      }
+    },
+    "open_stops": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "id",
+          "rule",
+          "run"
+        ]
+      }
+    },
+    "gate": {
+      "type": [
+        "object",
+        "null"
+      ],
+      "properties": {
+        "phase": {
+          "type": "string"
+        },
+        "blocking": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "decisions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "mark",
+          "level",
+          "question",
+          "option"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "mark": {
+            "enum": [
+              "HUMAN",
+              "PROXY"
+            ]
+          },
+          "level": {
+            "enum": [
+              "pr",
+              "relayed",
+              "none"
+            ]
+          },
+          "question": {
+            "type": "string"
+          },
+          "option": {
+            "type": "string"
+          }
+        }
+      }
+    }
+  }
+}

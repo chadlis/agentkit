@@ -1,0 +1,121 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/chadlis/agentkit/contracts/kit-decision-1/line.schema.json",
+  "title": "kit-decision/1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "id",
+    "time",
+    "question",
+    "option",
+    "mark",
+    "source",
+    "by"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "kit-decision/1"
+    },
+    "id": {
+      "type": "string",
+      "pattern": "^K-[0-9]{4,}$"
+    },
+    "time": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "question": {
+      "type": "string",
+      "minLength": 1
+    },
+    "option": {
+      "type": "string",
+      "minLength": 1
+    },
+    "mark": {
+      "enum": [
+        "HUMAN",
+        "PROXY"
+      ]
+    },
+    "rule": {
+      "type": "string",
+      "pattern": "^[a-z0-9_-]+@[0-9]+$"
+    },
+    "words": {
+      "type": "string",
+      "minLength": 1
+    },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "minProperties": 1,
+      "properties": {
+        "run": {
+          "type": "string"
+        },
+        "stop": {
+          "type": "string"
+        },
+        "pull_request": {
+          "type": "string",
+          "pattern": "^https://github\\.com/[^/]+/[^/]+/pull/[0-9]+@[0-9a-f]{40}$"
+        }
+      }
+    },
+    "by": {
+      "enum": [
+        "cli",
+        "conductor",
+        "evaluator"
+      ]
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "mark": {
+            "const": "PROXY"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "rule"
+        ],
+        "not": {
+          "required": [
+            "words"
+          ]
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "mark": {
+            "const": "HUMAN"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "words"
+        ],
+        "not": {
+          "required": [
+            "rule"
+          ]
+        },
+        "properties": {
+          "by": {
+            "const": "cli"
+          }
+        }
+      }
+    }
+  ]
+}

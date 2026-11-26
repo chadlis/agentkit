@@ -1,0 +1,200 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/chadlis/agentkit/contracts/kit-aggregate-1/aggregate.schema.json",
+  "title": "kit-aggregate/1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "kit",
+    "partition",
+    "reading",
+    "counts",
+    "aggregates",
+    "hypotrail",
+    "decision"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "kit-aggregate/1"
+    },
+    "kit": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "repository",
+        "commit",
+        "candidate"
+      ],
+      "properties": {
+        "repository": {
+          "type": "string"
+        },
+        "commit": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{40}$"
+        },
+        "candidate": {
+          "type": "string"
+        },
+        "frame_digest": {
+          "type": "string"
+        }
+      }
+    },
+    "partition": {
+      "type": "string"
+    },
+    "reading": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "number",
+        "allowed",
+        "job_run",
+        "actor"
+      ],
+      "properties": {
+        "number": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "allowed": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "job_run": {
+          "type": "string"
+        },
+        "actor": {
+          "type": "string"
+        }
+      }
+    },
+    "counts": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "units",
+        "produced",
+        "failed",
+        "missing"
+      ],
+      "properties": {
+        "units": {
+          "type": "integer"
+        },
+        "produced": {
+          "type": "integer"
+        },
+        "failed": {
+          "type": "integer"
+        },
+        "missing": {
+          "type": "integer"
+        }
+      }
+    },
+    "aggregates": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "name",
+          "value"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "pattern": "^[a-z0-9_.]+$"
+          },
+          "value": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "interval": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "number"
+            },
+            "minItems": 2,
+            "maxItems": 2
+          },
+          "n": {
+            "type": "integer"
+          }
+        }
+      }
+    },
+    "hypotrail": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "commit",
+        "observation_set_ids",
+        "assessment_ids",
+        "comparison_id"
+      ],
+      "properties": {
+        "commit": {
+          "type": "string"
+        },
+        "observation_set_ids": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "assessment_ids": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "comparison_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "decision": {
+      "type": [
+        "object",
+        "null"
+      ],
+      "additionalProperties": false,
+      "required": [
+        "decision_id",
+        "channel",
+        "level",
+        "source"
+      ],
+      "properties": {
+        "decision_id": {
+          "type": "string"
+        },
+        "channel": {
+          "const": "file_relayed"
+        },
+        "level": {
+          "enum": [
+            "pr",
+            "relayed"
+          ]
+        },
+        "source": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    }
+  }
+}

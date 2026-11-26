@@ -1,0 +1,40 @@
+{
+  "schema_version": "kit-aggregate/1",
+  "kit": {
+    "repository": "chadlis/agentkit",
+    "commit": "0000000000000000000000000000000000000000",
+    "candidate": "concise"
+  },
+  "partition": "public_check",
+  "reading": {
+    "number": 1,
+    "allowed": 1,
+    "job_run": "https://github.com/chadlis/agentkit/actions/runs/123",
+    "actor": "a-person"
+  },
+  "counts": {
+    "units": 6,
+    "produced": 6,
+    "failed": 0,
+    "missing": 0
+  },
+  "aggregates": [
+    {
+      "name": "criterion.facts_present.share",
+      "value": 0.83,
+      "interval": null,
+      "n": 6
+    }
+  ],
+  "hypotrail": {
+    "commit": "941ffd8463de6c8bcc14f13dedb55459a3a91dc9",
+    "observation_set_ids": [
+      "example-observation-set"
+    ],
+    "assessment_ids": [
+      "example-assessment"
+    ],
+    "comparison_id": null
+  },
+  "decision": null
+}

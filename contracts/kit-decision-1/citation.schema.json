@@ -1,0 +1,7 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/chadlis/agentkit/contracts/kit-decision-1/citation.schema.json",
+  "title": "kit-citation/1",
+  "type": "string",
+  "pattern": "^kit:[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+@[0-9a-f]{40}:decisions/log\\.jsonl#K-[0-9]{4,};mark=(HUMAN|PROXY);level=(pr|relayed|none)$"
+}

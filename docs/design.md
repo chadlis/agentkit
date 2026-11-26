@@ -78,7 +78,7 @@ The held-out set is the `public_check` Partition of the twin.
 
 ## 4. The decision log
 
-`decisions/log.jsonl`, one JSON object per decision:
+`decisions/log.jsonl`, one JSON object per decision, in the form `kit-decision/1` (`contracts/kit-decision-1/`; it adds `schema_version` to the fields below):
 
 | Field | Value |
 |---|---|
@@ -87,12 +87,13 @@ The held-out set is the `public_check` Partition of the twin.
 | `mark` | `HUMAN` or `PROXY` |
 | `rule` | `PROXY` only, required: the rule applied, by name and version |
 | `words` | `HUMAN` only, required: the person's own words, whole, read from a file the person wrote |
-| `source` | What the decision cites: a ledger run, a stop, a pull request |
-| `by` | The process that wrote the line (`conductor`, `cli`) |
+| `source` | What the decision cites: an object of `run`, `stop` and `pull_request` (a pull request as `https://github.com/<owner>/<repo>/pull/<n>@<40-hex merge commit>`) |
+| `by` | The process that wrote the line (`conductor`, `cli`, `evaluator`) |
 
 - A `PROXY` line without a `rule`, or a `HUMAN` line without `words`, is refused.
 - The conductor's process refuses to write `HUMAN`, whatever it is given.
 - `HUMAN` means "a person's words were transcribed"; it does not authenticate anyone. The authenticated act is a pull request merged from a human account. The log says which.
+- `agentkit cite ID` prints the line's citation (`kit-citation/1`), which a Hypotrail Decision may hold as its `source`. Its level is derived, never stored: `pr` for a `HUMAN` line that cites a pull request in that form, `relayed` for any other `HUMAN` line, `none` for a `PROXY` line.
 - These marks belong to the kit. They never become Decisions in a Hypotrail Study, and a Hypotrail Decision never becomes a kit mark: the two are reviewed apart.
 
 ## 5. The budget
