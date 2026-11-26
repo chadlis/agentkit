@@ -7,15 +7,17 @@ from pathlib import Path
 from agentkit import harness, ledger
 from agentkit.adapters.scripted import ScriptedAdapter
 from agentkit.cases import WorkloadError
+from agentkit.evaluator import HeldOutRefused
 from agentkit.export import export
 
 EXIT_INVALID_INPUT = 2
+EXIT_HELD_OUT_REFUSED = 9
 RUN_OPTIONS = ("workload_dir", "partition", "adapter", "fixture")
 
 
 def add_run_options(parser: argparse.ArgumentParser, required: bool) -> None:
     parser.add_argument("--workload-dir", required=required, type=Path, metavar="DIR", help="the Workload directory of a Hypotrail checkout (for example hypotrail/examples/chinook_prose)")
-    parser.add_argument("--set", required=required, choices=["dev"], dest="partition", help="the Partition to run; the held-out set runs only in the evaluator job")
+    parser.add_argument("--set", required=required, choices=["dev", "public_check"], dest="partition", help="the Partition to run; the held-out set (public_check) is refused with exit 9 outside the evaluator job")
     parser.add_argument("--adapter", required=required, choices=["scripted"], help="scripted: replays the answers of an authored fixture, with no model")
     parser.add_argument("--fixture", required=required, metavar="NAME", help="the fixture the scripted adapter replays: fixtures/answers-NAME.jsonl of the Workload")
 
@@ -47,6 +49,9 @@ def _start(args: argparse.Namespace) -> str:
 def _run(args: argparse.Namespace) -> int:
     try:
         run_id = _start(args)
+    except HeldOutRefused as error:
+        print(f"refused: {error}", file=sys.stderr)
+        return EXIT_HELD_OUT_REFUSED
     except (WorkloadError, ledger.LedgerError) as error:
         print(f"invalid input: {error}", file=sys.stderr)
         return EXIT_INVALID_INPUT
@@ -65,6 +70,9 @@ def _export(args: argparse.Namespace) -> int:
     try:
         run_id = args.run if args.run is not None else _start(args)
         counts = export(run_id, args.out)
+    except HeldOutRefused as error:
+        print(f"refused: {error}", file=sys.stderr)
+        return EXIT_HELD_OUT_REFUSED
     except (WorkloadError, ledger.LedgerError) as error:
         print(f"invalid input: {error}", file=sys.stderr)
         return EXIT_INVALID_INPUT

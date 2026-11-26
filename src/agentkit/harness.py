@@ -2,14 +2,19 @@
 
 from pathlib import Path
 
-from agentkit import ledger
+from agentkit import evaluator, ledger
 from agentkit.cases import read_cases
 
 REPEATS = (0,)
 
 
 def run(workload_dir: Path, partition: str, adapter, ledger_dir: Path = ledger.LEDGER_DIR) -> str:
-    """Runs `adapter` over every (Case, Repeat) of `partition` and returns the run id. An adapter that raises leaves its record `running`, for the next run to mark `failed`."""
+    """Runs `adapter` over every (Case, Repeat) of `partition` and returns the run id. An adapter that raises leaves its record `running`, for the next run to mark `failed`.
+
+    The held-out Partition outside the evaluator entry point is recorded `refused`, with no pair and no adapter call, and raises `HeldOutRefused`."""
+    if partition == evaluator.HELD_OUT and not evaluator.inside():
+        ledger.refuse_run(ledger_dir, partition=partition, adapter=adapter.name, configuration=adapter.settings)
+        raise evaluator.refusal()
     pairs = [(case, repeat) for case in read_cases(workload_dir, partition) for repeat in REPEATS]
     run_id = ledger.open_run(
         ledger_dir,

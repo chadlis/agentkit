@@ -71,6 +71,25 @@ def open_run(ledger_dir: Path, *, partition: str, adapter: str, configuration: d
     return run_id
 
 
+def refuse_run(ledger_dir: Path, *, partition: str, adapter: str, configuration: dict | None) -> str:
+    """Appends a `refused` record, closed when written, with no pair; leaves every other record as it is. Returns its run id."""
+    records = read_records(ledger_dir)
+    run_id = f"r-{len(records) + 1:04d}"
+    time = now()
+    records.append({
+        "run_id": run_id,
+        "set": partition,
+        "adapter": adapter,
+        "configuration": configuration,
+        "pairs": [],
+        "start_time": time,
+        "status": "refused",
+        "end_time": time,
+    })
+    write_records(ledger_dir, records)
+    return run_id
+
+
 def close_run(ledger_dir: Path, run_id: str, status: str = "completed") -> None:
     records = read_records(ledger_dir)
     record = next(item for item in records if item["run_id"] == run_id)
