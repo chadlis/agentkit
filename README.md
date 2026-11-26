@@ -6,16 +6,17 @@ It runs on a public twin only: the Chinook prose Workload (`chinook_prose`) of c
 
 ## Status
 
-Under construction. `agentkit export` runs the `scripted` adapter on the dev set and writes the files `import agent` reads; the harness, the ledger, the live adapter, the decision log and the evaluator job are planned in the slice issue and its tickets.
+Under construction. `agentkit run` runs the `scripted` adapter on the dev set, counted in the run ledger before its first call; `agentkit export` writes the files `import agent` reads from a closed ledger run; `agentkit status` prints the runs per set and per status. The held-out refusal, the budget, the live adapter, the decision log, the conductor and the evaluator job are planned in the slice issue and its tickets.
 
 ## Layout
 
 - `src/agentkit/`: the package. `cli.py` is the `agentkit` command.
   - `cases.py`: reads a Workload's Cases by Partition, never its References.
   - `adapters/`: the assistant adapters, `scripted` (replays authored fixture answers, no model) and, later, `live` (opt-in, bounded).
-  - (planned) `harness.py`: runs an adapter over (Case, Repeat) pairs and counts every run in the ledger.
+  - `harness.py`: runs an adapter over (Case, Repeat) pairs, with a ledger record `running` before the first call, closed after the last.
+  - `ledger.py`: the run ledger, `ledger/runs.jsonl` of the working directory, one record per run, and the answers each run recorded under `ledger/answers/`. A run that crashes stays `running`; the next run marks it `failed`.
   - `rules.py`: the named decision rules, `keep-higher-dev-score@1` first.
-  - `export.py`: writes `answers.jsonl` and `population.json` for `import agent`.
+  - `export.py`: writes `answers.jsonl` and `population.json` for `import agent`, from a `completed` ledger run only.
   - (planned) `decisions.py`: the decision log, with its `HUMAN` and `PROXY` marks.
   - (planned) `conductor.py`: the automatic loop on the dev set, under budget.
   - (planned) `evaluator.py`: the entry point of the evaluator job.
@@ -28,11 +29,17 @@ Under construction. `agentkit export` runs the `scripted` adapter on the dev set
 ## How it feeds Hypotrail
 
 ```
-agentkit export --workload-dir hypotrail/examples/chinook_prose --set dev --adapter scripted --fixture concise --out OUT
+agentkit run --workload-dir hypotrail/examples/chinook_prose --set dev --adapter scripted --fixture concise
+  -> Run r-0001 completed (in ledger/runs.jsonl)
+agentkit export --run r-0001 --out OUT
   -> OUT/answers.jsonl, OUT/population.json
+agentkit status
+  -> dev: 1 run (1 completed, 0 failed, 0 refused, 0 running)
 hypotrail import agent --study STUDY --source answers.jsonl --population population.json --request-id ID
 hypotrail assess / compare / report
 ```
+
+`agentkit export` given the options of `run` instead of `--run` makes a new run and exports it. Exporting a run that is not `completed` is refused (exit 2).
 
 The scripted run's `settings` are the map each line of its fixture declares; a fixture whose lines declare different maps is refused (exit 2).
 
