@@ -4,7 +4,10 @@ import json
 from dataclasses import dataclass
 from pathlib import Path
 
+from agentkit import evaluator
+
 DEV = "dev"
+PARTITIONS = (DEV, evaluator.HELD_OUT)
 
 
 class WorkloadError(ValueError):
@@ -31,9 +34,11 @@ def read_json_lines(path: Path) -> list[dict]:
 
 
 def read_cases(workload_dir: Path, partition: str) -> list[Case]:
-    """The Cases of `partition`, in file order. Only `dev` is read: the held-out set belongs to the evaluator job."""
-    if partition != DEV:
-        raise WorkloadError(f"only the {DEV} Partition can be read here, not {partition!r}")
+    """The Cases of `partition`, in file order. The held-out Partition is refused outside the evaluator entry point."""
+    if partition not in PARTITIONS:
+        raise WorkloadError(f"no Partition {partition!r}: only {', '.join(PARTITIONS)}")
+    if partition == evaluator.HELD_OUT and not evaluator.inside():
+        raise evaluator.refusal()
     try:
         workload = json.loads((workload_dir / "workload.json").read_text(encoding="utf-8"))
         relative = workload["cases"][partition]

@@ -49,13 +49,18 @@ def write_records(ledger_dir: Path, records: list[dict]) -> None:
     os.replace(temporary, path)
 
 
-def open_run(ledger_dir: Path, *, partition: str, adapter: str, configuration: dict | None, pairs: list[tuple[str, int]]) -> str:
-    """Marks every record still `running` as `failed`, then appends a `running` record for the new run; returns its run id."""
-    records = read_records(ledger_dir)
+def fail_stale_runs(records: list[dict]) -> None:
+    """Marks every record still `running` as `failed`: the run it counts crashed, since runs do not overlap."""
     for record in records:
         if record["status"] == "running":
             record["status"] = "failed"
             record["end_time"] = now()
+
+
+def open_run(ledger_dir: Path, *, partition: str, adapter: str, configuration: dict | None, pairs: list[tuple[str, int]]) -> str:
+    """Marks every record still `running` as `failed`, then appends a `running` record for the new run; returns its run id."""
+    records = read_records(ledger_dir)
+    fail_stale_runs(records)
     run_id = f"r-{len(records) + 1:04d}"
     records.append({
         "run_id": run_id,
@@ -66,6 +71,26 @@ def open_run(ledger_dir: Path, *, partition: str, adapter: str, configuration: d
         "start_time": now(),
         "status": "running",
         "end_time": None,
+    })
+    write_records(ledger_dir, records)
+    return run_id
+
+
+def refuse_run(ledger_dir: Path, *, partition: str, adapter: str, configuration: dict | None) -> str:
+    """Marks every record still `running` as `failed`, as `open_run` does, then appends a `refused` record, closed when written, with no pair. Returns its run id."""
+    records = read_records(ledger_dir)
+    fail_stale_runs(records)
+    run_id = f"r-{len(records) + 1:04d}"
+    time = now()
+    records.append({
+        "run_id": run_id,
+        "set": partition,
+        "adapter": adapter,
+        "configuration": configuration,
+        "pairs": [],
+        "start_time": time,
+        "status": "refused",
+        "end_time": time,
     })
     write_records(ledger_dir, records)
     return run_id
