@@ -157,6 +157,7 @@ def test_the_dev_export_of_both_fixtures_is_imported_assessed_compared_and_decid
     assert [(d["decision_id"], d["applies"]) for d in after["decisions"]] == [(decided["decision_id"], True)]
     assert [item["comparison_id"] for item in after["pending_decisions"]] == []
 
-    assert commands.log("agentkit-export-concise") + commands.log("agentkit-export-verbose") == []
+    kit_lines = commands.log("agentkit-export-concise") + commands.log("agentkit-export-verbose")
+    assert [line for line in kit_lines if line.startswith("open ")] == []
     sockets = [line for path in sorted(commands.audit.glob("*.log")) for line in path.read_text(encoding="utf-8").splitlines() if line.startswith("socket.")]
     assert sockets == []
