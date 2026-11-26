@@ -23,3 +23,9 @@ def workload_dir() -> Path:
             pytest.fail(message)
         pytest.skip(message)
     return directory
+
+
+@pytest.fixture(autouse=True)
+def ledger_in_tmp(tmp_path, monkeypatch) -> None:
+    """The kit writes its ledger under the working directory: every test runs in its own, never in the repository."""
+    monkeypatch.chdir(tmp_path)

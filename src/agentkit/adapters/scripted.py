@@ -5,6 +5,7 @@ from pathlib import Path
 
 from agentkit.cases import Case, WorkloadError, read_json_lines
 
+NAME = "scripted"
 ORIGIN = "authored_fixture"
 # What a fixture line may declare of its answer, carried to the exported line as it is.
 ANSWER_KEYS = ("observation_status", "raw_answer", "outcome", "usage", "metadata")
@@ -16,6 +17,8 @@ class Answer:
 
 
 class ScriptedAdapter:
+    name = NAME
+
     def __init__(self, fixture: Path):
         self._answers: dict[tuple[str, int], dict] = {}
         settings = []
