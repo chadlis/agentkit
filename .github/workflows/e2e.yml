@@ -1,0 +1,42 @@
+name: e2e
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      hypotrail_ref:
+        description: "A chadlis/hypotrail commit or ref to run against, instead of hypotrail.pin"
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+
+jobs:
+  dev-end-to-end:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - id: pin
+        env:
+          HYPOTRAIL_REF: ${{ inputs.hypotrail_ref }}
+        run: echo "ref=${HYPOTRAIL_REF:-$(tr -d '[:space:]' < hypotrail.pin)}" >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@v4
+        with:
+          repository: chadlis/hypotrail
+          ref: ${{ steps.pin.outputs.ref }}
+          path: hypotrail
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.13"
+      - run: uv sync --locked
+      - run: uv pip install ./hypotrail
+      # Offline: no secret is passed, so no live model call can run here (AGENTS.md).
+      # The whole suite runs, and a test that needs the twin fails instead of skipping.
+      - run: uv run --locked --no-sync pytest
+        env:
+          HYPOTRAIL_CHECKOUT: hypotrail
+          AGENTKIT_REQUIRE_TWIN: "1"
