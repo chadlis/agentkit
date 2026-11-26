@@ -6,12 +6,14 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from agentkit import evaluator
+from agentkit.adapters import RunStopped
 from agentkit.cases import DEV
 
 BUDGET_FILE = Path("budget.json")
 KEYS = ("reason", "dev_runs", "held_out_readings", "live", "prices")
 CEILING_KEYS = ("calls", "tokens", "usd")
 PRICE_KEYS = ("input_usd_per_mtok", "output_usd_per_mtok", "as_of", "source")
+CEILING_REASONS = ("call_ceiling", "token_ceiling", "cost_ceiling")
 
 
 class BudgetError(ValueError):
@@ -26,12 +28,11 @@ class BudgetRefused(Exception):
         self.reason = reason
 
 
-class CeilingReached(Exception):
+class CeilingReached(RunStopped):
     """A live invocation reached its ceiling before a call; the harness closes the run `failed` with `reason`."""
 
     def __init__(self, reason: str):
-        super().__init__(f"the live ceiling is reached: {reason}")
-        self.reason = reason
+        super().__init__(reason, f"the live ceiling is reached: {reason}")
 
 
 @dataclass(frozen=True)
@@ -66,6 +67,10 @@ def _count(value) -> bool:
     return isinstance(value, int) and not isinstance(value, bool) and value >= 0
 
 
+def _positive(value) -> bool:
+    return _amount(value) and value > 0
+
+
 def _amount(value) -> bool:
     return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value) and value >= 0
 
@@ -86,10 +91,10 @@ def load(path: Path = BUDGET_FILE) -> Budget:
     for model, entry in prices.items() if isinstance(prices, dict) else [(None, None)]:
         if (
             not isinstance(entry, dict) or set(entry) != set(PRICE_KEYS)
-            or not _amount(entry["input_usd_per_mtok"]) or not _amount(entry["output_usd_per_mtok"])
+            or not _positive(entry["input_usd_per_mtok"]) or not _positive(entry["output_usd_per_mtok"])
             or not isinstance(entry["as_of"], str) or not isinstance(entry["source"], str)
         ):
-            raise BudgetError(f"{path}: the price of {model!r} is {{{', '.join(PRICE_KEYS)}}}")
+            raise BudgetError(f"{path}: the price of {model!r} is {{{', '.join(PRICE_KEYS)}}}, with prices above 0 so that the spend ceiling binds")
     return Budget(data["dev_runs"], data["held_out_readings"], Ceiling(live["calls"], live["tokens"], live["usd"]), prices)
 
 

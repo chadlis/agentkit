@@ -3,6 +3,7 @@
 from pathlib import Path
 
 from agentkit import budget, evaluator, ledger
+from agentkit.adapters import RunStopped
 from agentkit.cases import read_cases
 
 REPEATS = (0,)
@@ -20,7 +21,7 @@ def run(workload_dir: Path, partition: str, adapter, ledger_dir: Path = ledger.L
 
     The held-out Partition outside the evaluator entry point is recorded `refused`, with no pair and no adapter call, and raises `HeldOutRefused`.
     A run that would exceed a limit of the budget is recorded `refused` with the limit as its reason, with no adapter call, and raises `BudgetRefused`.
-    An adapter that raises `CeilingReached` stops the run, which is closed `failed` with the ceiling as its reason."""
+    An adapter that raises `RunStopped` (the live ceiling, a provider error) stops the run, which is closed `failed` with its reason."""
     refuse_held_out(partition, adapter.name, adapter.settings, ledger_dir)
     limits = budget.load(budget_file)
     try:
@@ -40,7 +41,9 @@ def run(workload_dir: Path, partition: str, adapter, ledger_dir: Path = ledger.L
         for case, repeat in pairs:
             answer = adapter.answer(case, repeat)
             ledger.record_answer(ledger_dir, run_id, case.case_id, repeat, None if answer is None else answer.fields)
-    except budget.CeilingReached as stop:
+    except RunStopped as stop:
+        if stop.fields is not None:
+            ledger.record_answer(ledger_dir, run_id, case.case_id, repeat, stop.fields)
         ledger.close_run(ledger_dir, run_id, "failed", stop.reason)
         return run_id
     ledger.close_run(ledger_dir, run_id)

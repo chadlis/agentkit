@@ -115,7 +115,7 @@ The kit reads `budget.json` from its working directory, the one that holds `ledg
 | `dev_runs` | An integer: dev runs allowed in the cycle. The cycle is the whole ledger of the working directory; a dev run counts unless it was `refused` |
 | `held_out_readings` | An integer: held-out runs allowed per Configuration (the run's `settings`); a held-out run counts unless it was `refused` |
 | `live` | `{calls, tokens, usd}`: the ceiling of one live invocation. A ceiling of 0 refuses every live run |
-| `prices` | By model id, `{input_usd_per_mtok, output_usd_per_mtok, as_of, source}`: prices in USD per million tokens, the date they were read and the public pricing page they were read from, as text |
+| `prices` | By model id, `{input_usd_per_mtok, output_usd_per_mtok, as_of, source}`: prices in USD per million tokens, each above 0 so that the spend ceiling binds, the date they were read and the public pricing page they were read from, as text |
 
 A run that would exceed `dev_runs` or `held_out_readings`, or a live run under a ceiling of 0, exits 8 with a ledger record `refused` that names the limit in its `reason`, and calls no adapter.
 
@@ -123,6 +123,7 @@ A run that would exceed `dev_runs` or `held_out_readings`, or a live run under a
 - Anthropic only, through the Messages API, called with the Python standard library. The model id is given explicitly (`--model`); there is no default model.
 - It needs `--live`, the key in `AGENTKIT_ANTHROPIC_API_KEY`, and a price for its model in `budget.json`. Without any of them the run is refused before any call, with exit 2, and nothing is recorded.
 - Before each call it checks the ceiling: the calls made, the tokens counted and the spend so far, and it bounds the call's output tokens to what remains of the token and spend ceilings. When a limit is reached, the harness closes the run `failed` with the limit as its `reason` (`call_ceiling`, `token_ceiling` or `cost_ceiling`); `agentkit run` exits 8.
+- A call that fails (an HTTP status, an unreachable provider, a timeout, a reply that is not the API's) gives a `failed` line with `metadata.reason` `provider_error` and the error, and the harness closes the run `failed` with that reason; `agentkit run` exits 1. Its tokens and cost are unknown: `null`.
 - Such a run, closed by the harness with a stated reason, is exported; a `failed` run without a reason (one that crashed) is not. Every pair the run did not send to the model is a `missing` line, whose `metadata` carries the reason: a pair never sent was not attempted. `failed` means the model was called and the call failed.
 
 ## 6. The stops

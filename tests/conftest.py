@@ -7,11 +7,13 @@ from pathlib import Path
 import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
+# Resolved once, when pytest loads this file, against the directory pytest starts in: every test then runs in its own `tmp_path`.
+CHECKOUT = Path(os.environ.get("HYPOTRAIL_CHECKOUT", ROOT / "hypotrail")).resolve()
 
 
 def hypotrail_checkout() -> Path:
     """`HYPOTRAIL_CHECKOUT`, or `./hypotrail` where `e2e.yml` checks out the pinned commit."""
-    return Path(os.environ.get("HYPOTRAIL_CHECKOUT", ROOT / "hypotrail")).resolve()
+    return CHECKOUT
 
 
 @pytest.fixture(scope="session")

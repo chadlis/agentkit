@@ -12,6 +12,7 @@ from agentkit.cases import WorkloadError
 from agentkit.evaluator import HeldOutRefused
 from agentkit.export import export
 
+EXIT_RUN_FAILED = 1
 EXIT_INVALID_INPUT = 2
 EXIT_BUDGET = 8
 EXIT_HELD_OUT_REFUSED = 9
@@ -83,8 +84,8 @@ def _run(args: argparse.Namespace) -> int:
         return EXIT_INVALID_INPUT
     reason = _stopped(run_id)
     if reason is not None:
-        print(f"Run {run_id} stopped at the live ceiling ({reason}) and is recorded failed (in {ledger.runs_file(ledger.LEDGER_DIR)})", file=sys.stderr)
-        return EXIT_BUDGET
+        print(f"Run {run_id} stopped ({reason}) and is recorded failed (in {ledger.runs_file(ledger.LEDGER_DIR)})", file=sys.stderr)
+        return EXIT_BUDGET if reason in budget.CEILING_REASONS else EXIT_RUN_FAILED
     print(f"Run {run_id} completed (in {ledger.runs_file(ledger.LEDGER_DIR)})")
     return 0
 

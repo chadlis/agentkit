@@ -6,6 +6,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+from conftest import CHECKOUT
+
 ROOT = Path(__file__).resolve().parents[1]
 WORKFLOWS = ROOT / ".github" / "workflows"
 INNER = "AGENTKIT_SOCKETS_BLOCKED"
@@ -14,6 +16,8 @@ BLOCK_SOCKETS = '''
 import os, socket, sys
 
 _log = os.environ["AGENTKIT_SOCKET_LOG"]
+with open(os.environ["AGENTKIT_SOCKET_HOOK"], "a", encoding="utf-8") as loaded:
+    loaded.write(f"{os.getpid()}\\n")
 
 
 def _hook(event, args):
@@ -35,9 +39,12 @@ def test_the_whole_suite_runs_with_every_socket_blocked_and_attempts_no_network_
     blocker.mkdir()
     (blocker / "sitecustomize.py").write_text(BLOCK_SOCKETS, encoding="utf-8")
     log = tmp_path / "sockets.log"
-    env = dict(os.environ, AGENTKIT_SOCKET_LOG=str(log), **{INNER: "1"})
+    hook = tmp_path / "hook.log"
+    # The inner run starts in `tmp_path`: it gets the checkout as an absolute path.
+    env = dict(os.environ, AGENTKIT_SOCKET_LOG=str(log), AGENTKIT_SOCKET_HOOK=str(hook), HYPOTRAIL_CHECKOUT=str(CHECKOUT), **{INNER: "1"})
     env["PYTHONPATH"] = os.pathsep.join(filter(None, [str(blocker), os.environ.get("PYTHONPATH")]))
     result = subprocess.run([sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider", str(ROOT / "tests")], cwd=tmp_path, env=env, capture_output=True, text=True, timeout=900)
+    assert hook.is_file(), "the socket hook did not load in the inner run"
     attempts = log.read_text(encoding="utf-8").splitlines() if log.is_file() else []
     assert attempts == []
     assert result.returncode == 0, result.stdout[-3000:] + result.stderr[-3000:]

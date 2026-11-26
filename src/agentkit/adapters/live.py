@@ -2,6 +2,7 @@
 
 It needs `--live`, a key in `AGENTKIT_ANTHROPIC_API_KEY` and a price for its model in `budget.json`, and checks the ceiling of the invocation before each call. Tests replace `AnthropicClient`; none holds a real key."""
 
+import http.client
 import json
 import math
 import re
@@ -9,6 +10,7 @@ import time
 import urllib.request
 from dataclasses import dataclass
 
+from agentkit.adapters import RunStopped
 from agentkit.adapters.scripted import Answer
 from agentkit.budget import Ceiling, CeilingReached, Price
 from agentkit.cases import Case, WorkloadError
@@ -22,6 +24,9 @@ MODEL_ID = re.compile(r"claude-[a-z0-9][a-z0-9.-]*")
 MAX_OUTPUT_TOKENS = 1024
 # Below this many output tokens a call is not made: the answer would be cut before it says anything.
 MIN_OUTPUT_TOKENS = 16
+PROVIDER_ERROR = "provider_error"
+# What a failed call raises: an HTTP status, an unreachable host or a timeout (`OSError`), a broken connection, or a reply that is not the Messages API's.
+CALL_ERRORS = (OSError, http.client.HTTPException, ValueError, KeyError, TypeError)
 # Added to the prompt's UTF-8 length to bound the input tokens of a call before it is made: the message framing.
 FRAMING_TOKENS = 16
 
@@ -89,7 +94,7 @@ class LiveAdapter:
         if by_tokens < MIN_OUTPUT_TOKENS:
             raise CeilingReached("token_ceiling")
         left = self._ceiling.usd - self.usd - input_bound * self._price.input_usd_per_mtok / 1e6
-        by_cost = math.floor(left * 1e6 / self._price.output_usd_per_mtok) if self._price.output_usd_per_mtok else MAX_OUTPUT_TOKENS
+        by_cost = math.floor(left * 1e6 / self._price.output_usd_per_mtok)
         if by_cost < MIN_OUTPUT_TOKENS:
             raise CeilingReached("cost_ceiling")
         return min(MAX_OUTPUT_TOKENS, by_tokens, by_cost)
@@ -98,7 +103,15 @@ class LiveAdapter:
         max_tokens = self._output_bound(case.question)
         self.calls += 1
         started = time.monotonic()
-        completion = self._client.complete(self._model, case.question, max_tokens)
+        try:
+            completion = self._client.complete(self._model, case.question, max_tokens)
+        except CALL_ERRORS as error:
+            fields = {
+                "observation_status": "failed",
+                "usage": {self._model: {"tokens": None, "latency_seconds": time.monotonic() - started, "cost_usd": None}},
+                "metadata": {"reason": PROVIDER_ERROR, "error": f"{type(error).__name__}: {error}"},
+            }
+            raise RunStopped(PROVIDER_ERROR, f"the call for {case.case_id} failed: {type(error).__name__}", fields) from error
         latency = time.monotonic() - started
         tokens = completion.input_tokens + completion.output_tokens
         cost = (completion.input_tokens * self._price.input_usd_per_mtok + completion.output_tokens * self._price.output_usd_per_mtok) / 1e6
