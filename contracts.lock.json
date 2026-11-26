@@ -1,0 +1,11 @@
+{
+  "contracts": [
+    {
+      "name": "agent-answers/1",
+      "version": 1,
+      "owner": "chadlis/hypotrail",
+      "owner_commit": "fd6a0fe144e0ba104efe16745e7519eaa35354e8",
+      "sha256": "623826426bd283d137211162e3c96fdac482c4411e4917be59b003fe3195b4aa"
+    }
+  ]
+}

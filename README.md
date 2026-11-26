@@ -20,6 +20,7 @@ Under construction. Nothing runs yet: this repository holds the design (`docs/de
   - `evaluator.py`: the entry point of the evaluator job.
 - `tests/`: offline tests; no network, no model call.
 - `.github/workflows/`: `ci.yml` (pytest) and, later, `evaluator.yml` (the evaluator job, manual, in a protected environment).
+- `contracts/`: the file formats shared with Hypotrail and mlkit (JSON Schemas and examples), the copied ones pinned in `contracts.lock.json`; their changes in `docs/contracts/CHANGELOG.md`.
 - `docs/design.md`: the bricks, the contract with Hypotrail, the wall, the decision log, the budget, the stops, and the two modes.
 
 ## How it feeds Hypotrail
