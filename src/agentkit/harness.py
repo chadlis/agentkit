@@ -8,13 +8,18 @@ from agentkit.cases import read_cases
 REPEATS = (0,)
 
 
+def refuse_held_out(partition: str, adapter: str, configuration: dict | None, ledger_dir: Path = ledger.LEDGER_DIR) -> None:
+    """Outside the evaluator entry point, records a run of the held-out Partition `refused` and raises `HeldOutRefused`; does nothing otherwise."""
+    if partition == evaluator.HELD_OUT and not evaluator.inside():
+        ledger.refuse_run(ledger_dir, partition=partition, adapter=adapter, configuration=configuration)
+        raise evaluator.refusal()
+
+
 def run(workload_dir: Path, partition: str, adapter, ledger_dir: Path = ledger.LEDGER_DIR) -> str:
     """Runs `adapter` over every (Case, Repeat) of `partition` and returns the run id. An adapter that raises leaves its record `running`, for the next run to mark `failed`.
 
     The held-out Partition outside the evaluator entry point is recorded `refused`, with no pair and no adapter call, and raises `HeldOutRefused`."""
-    if partition == evaluator.HELD_OUT and not evaluator.inside():
-        ledger.refuse_run(ledger_dir, partition=partition, adapter=adapter.name, configuration=adapter.settings)
-        raise evaluator.refusal()
+    refuse_held_out(partition, adapter.name, adapter.settings, ledger_dir)
     pairs = [(case, repeat) for case in read_cases(workload_dir, partition) for repeat in REPEATS]
     run_id = ledger.open_run(
         ledger_dir,

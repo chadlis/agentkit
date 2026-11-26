@@ -42,6 +42,8 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def _start(args: argparse.Namespace) -> str:
+    # Before the adapter is built: a held-out run is refused even when its fixture cannot be read, and records no configuration.
+    harness.refuse_held_out(args.partition, args.adapter, None)
     adapter = ScriptedAdapter(args.workload_dir / "fixtures" / f"answers-{args.fixture}.jsonl")
     return harness.run(args.workload_dir, args.partition, adapter)
 
