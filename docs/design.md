@@ -60,6 +60,12 @@ hypotrail report --study STUDY --out report.html
 
 What the Study records of the kit is what the file declares (`declared`) or cannot establish (`unknown`); nothing is `verified`. The kit never claims, in a line, that it worked independently.
 
+### 2.4 Repeats, and the `failed` and `missing` lines
+
+- `--repeats N` (default 1) runs every Case N times, `repeat` 0 to N-1; the pairs are listed Case by Case. Below 1 is invalid input (exit 2), refused before anything is recorded. `agentkit export --run` takes no `--repeats`: the run's pairs are the ones it recorded.
+- A pair the adapter answers `failed` keeps its line, with the reason in `metadata.reason`. A pair the run did not reach (a ceiling, a stop) is a `missing` line whose `metadata.reason` is the reason the run stopped. A pair the scripted fixture holds no answer for (any `repeat` but 0 of the twin's fixtures) is a `missing` line, as Hypotrail counts an Episode its log does not hold. No pair of the population is dropped: `answers.jsonl` and `population.json` list the same pairs.
+- In `usage`, a measure (`tokens`, `latency_seconds`, `cost_usd`) an entry does not give is exported `null`, never 0.
+
 ## 3. The wall
 
 | Who | dev Cases | dev References | held-out Cases | held-out References | Per-Case results, held-out | Aggregate report, held-out |

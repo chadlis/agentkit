@@ -9,6 +9,12 @@ from agentkit.adapters import live, scripted
 
 # The `origin` of a line, by the adapter that produced it.
 ORIGINS = {scripted.NAME: scripted.ORIGIN, live.NAME: live.ORIGIN}
+USAGE_MEASURES = ("tokens", "latency_seconds", "cost_usd")
+
+
+def with_unknown_measures(usage: dict) -> dict:
+    """`usage` with every measure an entry does not give set to `null`: an unknown measure is never 0."""
+    return {name: dict.fromkeys(USAGE_MEASURES) | measures if isinstance(measures, dict) else measures for name, measures in usage.items()}
 
 
 def export(run_id: str, out: Path, ledger_dir: Path = ledger.LEDGER_DIR) -> Counter:
@@ -23,6 +29,8 @@ def export(run_id: str, out: Path, ledger_dir: Path = ledger.LEDGER_DIR) -> Coun
         line = {"case_id": case_id, "repeat": repeat}
         if fields is not None:
             line |= fields
+            if isinstance(line.get("usage"), dict):
+                line["usage"] = with_unknown_measures(line["usage"])
         elif (case_id, repeat) not in answers and record.get("reason") is not None:
             line |= {"observation_status": "missing", "metadata": {"reason": record["reason"]}}
         else:

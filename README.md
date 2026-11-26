@@ -21,7 +21,7 @@ Under construction. `agentkit run` runs the `scripted` adapter on the dev set, c
   - (planned) `decisions.py`: the decision log, with its `HUMAN` and `PROXY` marks.
   - (planned) `conductor.py`: the automatic loop on the dev set, under budget.
   - `evaluator.py`: the entry point of the evaluator job; it checks that it runs in a job of `evaluator.yml`. The job itself is planned.
-- `tests/`: offline tests; no network, no model call (`test_offline.py` reruns the suite with every socket blocked). `tests/e2e/test_dev_end_to_end.py` runs the export through Hypotrail's `init`, `import agent`, `assess`, `compare` and a proxy `decide`.
+- `tests/`: offline tests; no network, no model call (`test_offline.py` reruns the suite with every socket blocked). `tests/e2e/test_dev_end_to_end.py` runs the export through Hypotrail's `init`, `import agent`, `assess`, `compare` and a proxy `decide`, and imports a three-repeat export and one with `failed` and `missing` lines.
 - `.github/workflows/`: `ci.yml` (pytest), `e2e.yml` (the whole suite against Hypotrail checked out at `hypotrail.pin`, or at `hypotrail_ref` when dispatched) and, later, `evaluator.yml` (the evaluator job, manual, in a protected environment).
 - `budget.json`: the kit's limits and model prices, raised only by a pull request that says why.
 - `hypotrail.pin`: the chadlis/hypotrail commit the kit is tested against.
@@ -41,7 +41,7 @@ hypotrail import agent --study STUDY --source answers.jsonl --population populat
 hypotrail assess / compare / report
 ```
 
-`agentkit export` given the options of `run` instead of `--run` makes a new run and exports it. Exporting any other run (a crashed or refused one) is refused (exit 2).
+`--repeats N` runs every Case N times (`repeat` 0 to N-1), one line per (Case, Repeat); a failed pair and a pair the run did not reach keep their lines, `failed` and `missing` (`docs/design.md`, section 2.4). `agentkit export` given the options of `run` instead of `--run` makes a new run and exports it. Exporting any other run (a crashed or refused one) is refused (exit 2).
 
 The scripted run's `settings` are the map each line of its fixture declares; a fixture whose lines declare different maps is refused (exit 2).
 
