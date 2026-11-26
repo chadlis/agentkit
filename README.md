@@ -14,6 +14,7 @@ Under construction. `agentkit export` runs the `scripted` adapter on the dev set
   - `cases.py`: reads a Workload's Cases by Partition, never its References.
   - `adapters/`: the assistant adapters, `scripted` (replays authored fixture answers, no model) and, later, `live` (opt-in, bounded).
   - (planned) `harness.py`: runs an adapter over (Case, Repeat) pairs and counts every run in the ledger.
+  - `rules.py`: the named decision rules, `keep-higher-dev-score@1` first.
   - `export.py`: writes `answers.jsonl` and `population.json` for `import agent`.
   - (planned) `decisions.py`: the decision log, with its `HUMAN` and `PROXY` marks.
   - (planned) `conductor.py`: the automatic loop on the dev set, under budget.
@@ -32,6 +33,8 @@ agentkit export --workload-dir hypotrail/examples/chinook_prose --set dev --adap
 hypotrail import agent --study STUDY --source answers.jsonl --population population.json --request-id ID
 hypotrail assess / compare / report
 ```
+
+The scripted run's `settings` are the map each line of its fixture declares; a fixture whose lines declare different maps is refused (exit 2).
 
 The format is the one of `import agent` at the Hypotrail commit in `hypotrail.pin`, written down in `contracts/agent-answers-1/`.
 

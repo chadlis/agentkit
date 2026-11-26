@@ -11,7 +11,9 @@ from pathlib import Path
 
 import pytest
 
-RULE = "keep-higher-dev-score@1"
+from agentkit.rules import KEEP_HIGHER_DEV_SCORE, keep_higher_dev_score
+
+RULE = KEEP_HIGHER_DEV_SCORE
 SITECUSTOMIZE = '''
 import os, sys
 
@@ -135,11 +137,9 @@ def test_the_dev_export_of_both_fixtures_is_imported_assessed_compared_and_decid
         assert recorded["observation_set_id"] == observation_set
         assert recorded["provenance"]["settings"] == {"origin": "declared", "value": exported}, fixture
 
-    # The test applies the rule itself: the kit has no decision log yet.
     pending = next(item for item in status["pending_decisions"] if item["comparison_id"] == comparison_id)
     delta = comparison["delta"]
-    assert delta["control"] != delta["candidate"]
-    option_id = "keep_control" if delta["control"] > delta["candidate"] else "keep_candidate"
+    option_id = keep_higher_dev_score(control=delta["control"], candidate=delta["candidate"])
     option = next(item for item in pending["options"] if item["id"] == option_id)
     decided = json_out(commands.run(
         [*hypotrail, "decide", "--study", study, "--author", "proxy",

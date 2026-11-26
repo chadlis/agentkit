@@ -94,6 +94,7 @@ The held-out set is the `public_check` Partition of the twin.
 - The conductor's process refuses to write `HUMAN`, whatever it is given.
 - `HUMAN` means "a person's words were transcribed"; it does not authenticate anyone. The authenticated act is a pull request merged from a human account. The log says which.
 - `agentkit cite ID` prints the line's citation (`kit-citation/1`), which a Hypotrail Decision may hold as its `source`. Its level is derived, never stored: `pr` for a `HUMAN` line that cites a pull request in that form, `relayed` for any other `HUMAN` line, `none` for a `PROXY` line.
+- `keep-higher-dev-score@1` (`agentkit.rules`) answers `keep_after_comparison` from the two dev `text_facts_success` shares of a Comparison: it keeps the Candidate when its share is higher, and the Control otherwise, a tie included (drive, 2026-11-26).
 - These marks belong to the kit. They never become Decisions in a Hypotrail Study, and a Hypotrail Decision never becomes a kit mark: the two are reviewed apart.
 
 ## 5. The budget
