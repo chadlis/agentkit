@@ -7,10 +7,14 @@ import json
 import os
 import subprocess
 import sys
+from collections import Counter
 from pathlib import Path
 
 import pytest
 
+from agentkit import harness
+from agentkit.adapters import RunStopped
+from agentkit.adapters.scripted import Answer, ScriptedAdapter
 from agentkit.rules import KEEP_HIGHER_DEV_SCORE, keep_higher_dev_score
 
 RULE = KEEP_HIGHER_DEV_SCORE
@@ -161,3 +165,70 @@ def test_the_dev_export_of_both_fixtures_is_imported_assessed_compared_and_decid
     assert [line for line in kit_lines if line.startswith("open ")] == []
     sockets = [line for path in sorted(commands.audit.glob("*.log")) for line in path.read_text(encoding="utf-8").splitlines() if line.startswith("socket.")]
     assert sockets == []
+
+
+def import_counts(commands: Commands, hypotrail: list[str], workload_dir: Path, tmp_path: Path, out: Path) -> subprocess.CompletedProcess:
+    """Imports the export in `out` into a new Study of `chinook_prose`; returns the import's process."""
+    examples = str(workload_dir.parent)
+    study = str(tmp_path / "study")
+    json_out(commands.run([*hypotrail, "init", "--workload", "chinook_prose", "--study", study, "--examples-dir", examples, "--json"], "hypotrail-init"))
+    return commands.run(
+        [*hypotrail, "import", "agent", "--study", study, "--source", str(out / "answers.jsonl"), "--population", str(out / "population.json"),
+         "--request-id", "import", "--examples-dir", examples],
+        "hypotrail-import",
+    )
+
+
+def test_three_repeats_of_the_dev_export_reach_hypotrail_as_one_episode_per_case_and_repeat(workload_dir, tmp_path):
+    hypotrail = hypotrail_command()
+    workload = json.loads((workload_dir / "workload.json").read_text(encoding="utf-8"))
+    commands = Commands(tmp_path, workload_dir / workload["references"])
+    out = tmp_path / "export"
+    result = commands.run(
+        [*agentkit_command(), "export", "--workload-dir", str(workload_dir), "--set", "dev", "--adapter", "scripted", "--fixture", "concise",
+         "--repeats", "3", "--out", str(out)],
+        "agentkit-export",
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    lines = [json.loads(text) for text in (out / "answers.jsonl").read_text(encoding="utf-8").splitlines()]
+    counts = Counter(line["observation_status"] for line in lines)
+    # The fixture holds an answer for repeat 0 only: repeats 1 and 2 are pairs it does not hold, hence missing.
+    assert (len(lines), counts) == (90, {"produced": 30, "missing": 60})
+    imported = import_counts(commands, hypotrail, workload_dir, tmp_path, out)
+    assert "30 Episodes produced, 0 failed, 60 missing" in imported.stdout, imported.stdout + imported.stderr
+    assert imported.returncode == 0, imported.stderr
+
+
+class FailsOnceThenStops:
+    """Replays the concise fixture, except a `failed` answer for one dev Case and a stop of the run at a later one."""
+
+    name = "fails-once-then-stops"
+
+    def __init__(self, workload_dir: Path, fails_on: str, stops_on: str):
+        self._inner = ScriptedAdapter(workload_dir / "fixtures" / "answers-concise.jsonl")
+        self.settings = self._inner.settings
+        self.fails_on, self.stops_on = fails_on, stops_on
+
+    def answer(self, case, repeat):
+        if case.case_id == self.stops_on:
+            raise RunStopped("test_stop", f"the test stops the run at {case.case_id}")
+        if case.case_id == self.fails_on:
+            return Answer(fields={"observation_status": "failed", "metadata": {"reason": "adapter_error", "error": "the test adapter failed"}})
+        return self._inner.answer(case, repeat)
+
+
+def test_an_export_with_failed_and_missing_lines_is_imported_by_hypotrail_with_the_same_counts(workload_dir, tmp_path):
+    hypotrail = hypotrail_command()
+    workload = json.loads((workload_dir / "workload.json").read_text(encoding="utf-8"))
+    commands = Commands(tmp_path, workload_dir / workload["references"])
+    # The run is made in this process, in the ledger of `tmp_path`, which the commands share as their working directory.
+    run_id = harness.run(workload_dir, "dev", FailsOnceThenStops(workload_dir, fails_on="D05", stops_on="D28"))
+    out = tmp_path / "export"
+    result = commands.run([*agentkit_command(), "export", "--run", run_id, "--out", str(out)], "agentkit-export")
+    assert result.returncode == 0, result.stdout + result.stderr
+    lines = [json.loads(text) for text in (out / "answers.jsonl").read_text(encoding="utf-8").splitlines()]
+    counts = Counter(line["observation_status"] for line in lines)
+    assert counts == {"produced": 26, "failed": 1, "missing": 3}
+    imported = import_counts(commands, hypotrail, workload_dir, tmp_path, out)
+    assert f"{counts['produced']} Episodes produced, {counts['failed']} failed, {counts['missing']} missing" in imported.stdout, imported.stdout + imported.stderr
+    assert imported.returncode == 0, imported.stderr

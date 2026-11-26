@@ -17,7 +17,7 @@ EXIT_INVALID_INPUT = 2
 EXIT_BUDGET = 8
 EXIT_HELD_OUT_REFUSED = 9
 RUN_OPTIONS = ("workload_dir", "partition", "adapter")
-ADAPTER_OPTIONS = ("fixture", "model")
+ADAPTER_OPTIONS = ("fixture", "model", "repeats")
 INVALID = (WorkloadError, ledger.LedgerError, budget.BudgetError)
 
 
@@ -28,6 +28,7 @@ def add_run_options(parser: argparse.ArgumentParser, required: bool) -> None:
     parser.add_argument("--fixture", metavar="NAME", help="scripted only: the fixture it replays, fixtures/answers-NAME.jsonl of the Workload")
     parser.add_argument("--model", metavar="ID", help="live only: the Anthropic model id; there is no default")
     parser.add_argument("--live", action="store_true", help="live only: allow paid model calls, under the ceiling of budget.json")
+    parser.add_argument("--repeats", type=int, metavar="N", help="run every Case N times, repeat 0 to N-1 (default 1)")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -61,7 +62,7 @@ def _start(args: argparse.Namespace) -> str:
         if args.fixture is None or args.model is not None or args.live:
             raise WorkloadError("the scripted adapter needs --fixture, and takes neither --model nor --live")
         adapter = ScriptedAdapter(args.workload_dir / "fixtures" / f"answers-{args.fixture}.jsonl")
-    return harness.run(args.workload_dir, args.partition, adapter)
+    return harness.run(args.workload_dir, args.partition, adapter, repeats=1 if args.repeats is None else args.repeats)
 
 
 def _stopped(run_id: str) -> str | None:
@@ -93,7 +94,7 @@ def _run(args: argparse.Namespace) -> int:
 def _export(args: argparse.Namespace) -> int:
     given = [name for name in RUN_OPTIONS if getattr(args, name) is not None]
     if args.run is not None and (given or args.live or any(getattr(args, name) is not None for name in ADAPTER_OPTIONS)):
-        print("invalid input: --run exports an existing run and takes none of --workload-dir, --set, --adapter, --fixture, --model, --live", file=sys.stderr)
+        print("invalid input: --run exports an existing run and takes none of --workload-dir, --set, --adapter, --fixture, --model, --live, --repeats", file=sys.stderr)
         return EXIT_INVALID_INPUT
     if args.run is None and len(given) != len(RUN_OPTIONS):
         print("invalid input: give --run, or all of --workload-dir, --set, --adapter and the adapter's options", file=sys.stderr)

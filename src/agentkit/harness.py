@@ -4,9 +4,7 @@ from pathlib import Path
 
 from agentkit import budget, evaluator, ledger
 from agentkit.adapters import RunStopped
-from agentkit.cases import read_cases
-
-REPEATS = (0,)
+from agentkit.cases import WorkloadError, read_cases
 
 
 def refuse_held_out(partition: str, adapter: str, configuration: dict | None, ledger_dir: Path = ledger.LEDGER_DIR) -> None:
@@ -16,12 +14,15 @@ def refuse_held_out(partition: str, adapter: str, configuration: dict | None, le
         raise evaluator.refusal()
 
 
-def run(workload_dir: Path, partition: str, adapter, ledger_dir: Path = ledger.LEDGER_DIR, budget_file: Path = budget.BUDGET_FILE) -> str:
+def run(workload_dir: Path, partition: str, adapter, ledger_dir: Path = ledger.LEDGER_DIR, budget_file: Path = budget.BUDGET_FILE, repeats: int = 1) -> str:
     """Runs `adapter` over every (Case, Repeat) of `partition` and returns the run id. An adapter that raises leaves its record `running`, for the next run to mark `failed`.
 
     The held-out Partition outside the evaluator entry point is recorded `refused`, with no pair and no adapter call, and raises `HeldOutRefused`.
     A run that would exceed a limit of the budget is recorded `refused` with the limit as its reason, with no adapter call, and raises `BudgetRefused`.
-    An adapter that raises `RunStopped` (the live ceiling, a provider error) stops the run, which is closed `failed` with its reason."""
+    An adapter that raises `RunStopped` (the live ceiling, a provider error) stops the run, which is closed `failed` with its reason.
+    Every Case is run `repeats` times, repeat 0 to `repeats` - 1; fewer than 1 is invalid input, refused before anything is recorded."""
+    if type(repeats) is not int or repeats < 1:
+        raise WorkloadError(f"repeats must be an integer of at least 1, not {repeats!r}")
     refuse_held_out(partition, adapter.name, adapter.settings, ledger_dir)
     limits = budget.load(budget_file)
     try:
@@ -29,7 +30,7 @@ def run(workload_dir: Path, partition: str, adapter, ledger_dir: Path = ledger.L
     except budget.BudgetRefused as refusal:
         ledger.refuse_run(ledger_dir, partition=partition, adapter=adapter.name, configuration=adapter.settings, reason=refusal.reason)
         raise
-    pairs = [(case, repeat) for case in read_cases(workload_dir, partition) for repeat in REPEATS]
+    pairs = [(case, repeat) for case in read_cases(workload_dir, partition) for repeat in range(repeats)]
     run_id = ledger.open_run(
         ledger_dir,
         partition=partition,
