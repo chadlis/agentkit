@@ -1,4 +1,4 @@
-"""The conductor's marker files, `ledger/conductor/<conduct_id>.json` of the working directory (drive, 2026-11-27).
+"""The conductor's marker files, `ledger/conductor/<conduct_id>.json` of the working directory.
 
 The conductor writes its marker, its pid and start time, when its loop starts, and removes it when the loop ends, on an error too. While a marker names a live process, `agentkit decide --mark human` refuses, whatever `AGENTKIT_PROCESS` says. A marker whose process is gone is stale: it is reported and ignored. Like the process mark, this is a guard against an accidental `HUMAN` write, not a wall and not authentication: a process can delete the file, and a pid can be reused by another process."""
 
