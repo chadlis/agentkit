@@ -6,6 +6,7 @@ from pathlib import Path
 
 import jsonschema
 import pytest
+from contract_formats import FORMATS
 
 ROOT = Path(__file__).resolve().parents[1]
 CONTRACTS = ROOT / "contracts"
@@ -22,7 +23,7 @@ def lines(path):
 
 
 def validator(directory, name):
-    return jsonschema.Draft202012Validator(load(CONTRACTS / directory / name))
+    return jsonschema.Draft202012Validator(load(CONTRACTS / directory / name), format_checker=FORMATS)
 
 
 def directory_digest(directory: Path) -> str:
@@ -45,6 +46,20 @@ def test_the_decision_log_examples_are_accepted_and_each_refused_line_is_refused
     assert [list(lines_validator.iter_errors(line)) for line in log] == [[] for _ in log]
     for case in lines(CONTRACTS / "kit-decision-1" / "examples" / "refused.jsonl"):
         assert list(lines_validator.iter_errors(case["line"])), case["case"]
+
+
+@pytest.mark.parametrize("timestamp", [
+    "2026-02-30T12:34:56Z",
+    "2026-11-27T12:34:56",
+    "2026-11-27T12:34:56+01:99",
+    "2026-11-27 12:34:56Z",
+])
+def test_the_decision_line_refuses_an_invalid_timestamp(timestamp):
+    checker = validator("kit-decision-1", "line.schema.json")
+    example = lines(CONTRACTS / "kit-decision-1" / "examples" / "log.jsonl")[0]
+    [error] = checker.iter_errors({**example, "time": timestamp})
+    assert error.validator == "format"
+    assert list(error.path) == ["time"]
 
 
 def test_the_citation_examples_are_accepted_name_a_line_of_the_log_with_its_mark_and_the_refused_ones_are_refused():
