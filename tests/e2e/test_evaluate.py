@@ -261,10 +261,22 @@ def test_a_reading_sent_sigterm_removes_its_temporary_directory_and_closes_the_r
     assert [(record["status"], record.get("reason")) for record in read_records()] == [("failed", "interrupted")]
 
 
-def test_a_hypotrail_failure_whose_stderr_names_a_held_out_case_shows_it_in_no_output_of_the_job_and_no_file(workload_dir, tmp_path, monkeypatch):
+def hypotrail_failing_at(tmp_path: Path, failing: str, stderr: str, assessment: dict | None = None) -> dict:
+    """The environment under which a fake `python -m hypotrail` answers each command of the job as Hypotrail would, until `failing`, where it writes `stderr` and exits 2."""
+    printed = {"init": {"references_id": "a8-references"}, "import": {"observation_set_id": "a8-observations"}, "assess": {"assessment": assessment or {}}, "report": {}}
+    return fake_hypotrail(tmp_path, f"""import json, sys
+if sys.argv[1] == {failing!r}:
+    sys.stderr.write({stderr!r})
+    sys.exit(2)
+print(json.dumps({printed!r}[sys.argv[1]]))
+""")
+
+
+@pytest.mark.parametrize("failing", ["init", "import", "assess", "report"])
+def test_a_hypotrail_failure_whose_stderr_names_a_held_out_case_shows_it_in_no_output_of_the_job_and_no_file(workload_dir, tmp_path, monkeypatch, failing):
     case_id = held_out_cases(workload_dir)[0][0]["case_id"]
     # Hypotrail names a Case in what it prints on stderr, as `import agent` does for a Case it does not know.
-    environment_of_job = fake_hypotrail(tmp_path, f"import sys\nsys.stderr.write({case_id!r} + ' is not a Case\\n')\nsys.exit(2)\n")
+    environment_of_job = hypotrail_failing_at(tmp_path, failing, f"{case_id} is not a Case\n")
     work = kit_clone(tmp_path)
     monkeypatch.chdir(work)
     temporary = tmp_path.parent / f"{tmp_path.name}-a8-tmp"
@@ -277,6 +289,17 @@ def test_a_hypotrail_failure_whose_stderr_names_a_held_out_case_shows_it_in_no_o
     holding = files_holding([case_id], kit_files())
     assert holding == 0
     assert list(temporary.iterdir()) == []
+
+
+def test_per_criterion_aggregates_hypotrail_does_not_give_are_reported_by_the_error_type_only(workload_dir, tmp_path):
+    case_id = held_out_cases(workload_dir)[0][0]["case_id"]
+    # The Assessment names a per-Criterion file that is not there, whose path holds a held-out Case id.
+    environment_of_job = hypotrail_failing_at(tmp_path, "none", "", assessment={"detailed_metrics_ref": {"path": f"{case_id}-metrics.json"}})
+    done = evaluate(workload_dir, tmp_path / "a8-published", env=environment_of_job)
+    assert [(record["status"], record.get("reason")) for record in read_records()] == [("failed", "hypotrail")]
+    reported = "hypotrail assess gave no per-Criterion aggregates (FileNotFoundError)" in done.stderr
+    shown = case_id in done.stdout + done.stderr
+    assert (done.returncode, reported, shown) == (1, True, False)
 
 
 def test_an_error_after_the_reading_is_counted_closes_it_failed_and_shows_no_held_out_case(workload_dir, tmp_path, monkeypatch, capsys):
