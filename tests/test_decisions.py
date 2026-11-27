@@ -201,3 +201,110 @@ def test_a_stale_conductor_marker_whose_process_is_gone_is_reported_and_ignored(
     assert written.returncode == 0, written.stdout + written.stderr
     assert str(marker.relative_to(kit["root"])) in written.stderr
     assert [line["mark"] for line in log(kit)] == ["HUMAN"]
+
+
+RELAY_SOURCE = "https://github.com/example/kit/issues/1#issuecomment-42"
+RELAYED_BY = "fixture-agent"
+
+
+def relay(*extra, words=WORDS, source=RELAY_SOURCE, relayed_by=RELAYED_BY):
+    arguments = ["--mark", "relayed", *extra]
+    for option, value in (("--words", words), ("--source", source), ("--relayed-by", relayed_by)):
+        if value is not None:
+            arguments += [option, value]
+    return decide(*arguments)
+
+
+@pytest.mark.parametrize(("fields", "reason"), [
+    ({"words": None}, "RELAYED_WITHOUT_WORDS"),
+    ({"words": " \n"}, "RELAYED_WITHOUT_WORDS"),
+    ({"source": None}, "RELAYED_WITHOUT_SOURCE"),
+    ({"source": "http://example.invalid/message"}, "RELAYED_SOURCE_FORM"),
+    ({"source": "https:///message"}, "RELAYED_SOURCE_FORM"),
+    ({"source": "https://sender@example.invalid/message"}, "RELAYED_SOURCE_FORM"),
+    ({"relayed_by": None}, "RELAYED_WITHOUT_RELAY"),
+    ({"relayed_by": " \t"}, "RELAYED_WITHOUT_RELAY"),
+])
+def test_required_relayed_fields_are_refused_without_a_log_write(kit, capsys, fields, reason):
+    assert relay(**fields) == 2
+    assert reason in capsys.readouterr().err
+    assert log(kit) == []
+
+
+@pytest.mark.parametrize("role", ["conductor", "evaluator"])
+def test_a_marked_process_cannot_write_relayed_even_when_cli_is_passed_as_writer(kit, capsys, monkeypatch, role):
+    monkeypatch.setenv(decisions.PROCESS_VARIABLE, role)
+    assert relay() == 2
+    assert "RELAYED_REFUSED" in capsys.readouterr().err
+    with pytest.raises(decisions.DecisionError) as error:
+        decisions.append(
+            question="q", option="o", mark="RELAYED", source={}, by="cli",
+            words=WORDS, source_url=RELAY_SOURCE, relayed_by=RELAYED_BY,
+        )
+    assert error.value.code == "RELAYED_REFUSED"
+    assert log(kit) == []
+
+
+def test_a_conductor_marker_refuses_a_relay_from_an_unmarked_cli(kit, capsys):
+    conductor_marker(kit, os.getpid())
+    assert relay() == 2
+    assert "CONDUCTOR_RUNNING" in capsys.readouterr().err
+    assert log(kit) == []
+
+
+def test_a_relay_keeps_its_verbatim_words_and_committed_citation(kit, capsys):
+    assert relay() == 0
+    [line] = log(kit)
+    assert (line["mark"], line["words"], line["source"], line["by"], line["relayed_by"], line["rule"]) == (
+        "RELAYED", WORDS, RELAY_SOURCE, "cli", RELAYED_BY, "owner-relayed@1",
+    )
+    assert not list(LINE.iter_errors(line))
+    assert decisions.level(line) == "relayed"
+    assert "level" not in line
+    assert WORDS not in capsys.readouterr().out
+    git(kit["root"], "init", "-q")
+    git(kit["root"], "add", "decisions/log.jsonl")
+    git(kit["root"], "commit", "-q", "-m", "the relayed fixture")
+    head = git(kit["root"], "rev-parse", "HEAD")
+    cited = agentkit("cite", line["id"])
+    assert cited.returncode == 0, cited.stderr
+    assert cited.stdout == f"kit:chadlis/agentkit@{head}:decisions/log.jsonl#K-0001;mark=RELAYED;level=relayed\n"
+    assert not list(CITATION.iter_errors(cited.stdout.rstrip("\n")))
+
+
+def test_status_displays_relayed_under_its_own_mark_and_does_not_resume_a_human_stop(kit, capsys):
+    assert relay() == 0
+    capsys.readouterr()
+    assert main(["status"]) == 0
+    status = capsys.readouterr().out
+    assert "K-0001 RELAYED (level relayed" in status
+    assert "HUMAN" not in status and WORDS not in status
+    assert "Open stops: STOP-r-0002 (failed-share@1, run r-0002)" in status
+
+    assert main(["status", "--json"]) == 0
+    packed = json.loads(capsys.readouterr().out)
+    status_schema = ROOT / "contracts" / "kit-status-1" / "status.schema.json"
+    jsonschema.validate(packed, json.loads(status_schema.read_text(encoding="utf-8")))
+    assert packed["gate"] is None
+    assert [stop["id"] for stop in packed["open_stops"]] == ["STOP-r-0002"]
+    [line] = packed["decisions"]
+    assert (line["mark"], line["level"]) == ("RELAYED", "relayed")
+    assert "words" not in line and "source" not in line
+
+
+@pytest.mark.parametrize("legacy_option", [
+    ("--run", "r-0001"), ("--stop", "STOP-r-0002"),
+    ("--pull-request", PR), ("--rule", "owner-relayed@1"),
+])
+def test_a_relay_refuses_legacy_decision_options(kit, capsys, legacy_option):
+    assert relay(*legacy_option) == 2
+    assert "RELAYED_WITH_LEGACY_OPTIONS" in capsys.readouterr().err
+    assert log(kit) == []
+
+
+def test_legacy_marks_refuse_relay_options(kit, capsys):
+    assert proxy("--words", WORDS) == 2
+    assert "RELAY_OPTIONS_REFUSED" in capsys.readouterr().err
+    assert human(kit, "--source", RELAY_SOURCE) == 2
+    assert "RELAY_OPTIONS_REFUSED" in capsys.readouterr().err
+    assert log(kit) == []

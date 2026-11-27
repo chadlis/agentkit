@@ -1,6 +1,7 @@
 """The `agentkit` command. The run ledger is `ledger/` of the working directory."""
 
 import argparse
+import json
 import os
 import sys
 from pathlib import Path
@@ -8,7 +9,7 @@ from pathlib import Path
 from agentkit import budget, conductor, decisions, evaluator_job, harness, ledger, markers, stops
 from agentkit.adapters import live
 from agentkit.adapters.scripted import ScriptedAdapter
-from agentkit.cases import WorkloadError
+from agentkit.cases import DEV, WorkloadError
 from agentkit.evaluator import HeldOutRefused
 from agentkit.export import export
 
@@ -48,13 +49,17 @@ def build_parser() -> argparse.ArgumentParser:
     export.add_argument("--out", required=True, type=Path, metavar="OUT", help="the directory to write answers.jsonl and population.json in")
     export.set_defaults(handler=_export)
     status = commands.add_parser("status", help="print, read-only, the ledger's runs per set and per status, the open stops and the decisions with their marks")
+    status.add_argument("--json", action="store_true", help="print kit-status/1")
     status.set_defaults(handler=_status)
-    decide = commands.add_parser("decide", help="append one decision to decisions/log.jsonl, marked PROXY with its rule or HUMAN with a person's words file")
+    decide = commands.add_parser("decide", help="append a HUMAN, RELAYED or PROXY decision to decisions/log.jsonl")
     decide.add_argument("--question", required=True, metavar="TEXT", help="what is decided: which Configuration to keep trying, whether to resume after a stop")
     decide.add_argument("--option", required=True, metavar="TEXT", help="the option kept")
-    decide.add_argument("--mark", required=True, choices=["proxy", "human"])
+    decide.add_argument("--mark", required=True, choices=["proxy", "human", "relayed"])
     decide.add_argument("--rule", metavar="NAME@VERSION", help="PROXY only, required: the rule applied")
     decide.add_argument("--words-file", type=Path, metavar="FILE", help="HUMAN only, required: a file the person wrote, read whole")
+    decide.add_argument("--words", metavar="TEXT", help="RELAYED only, required: the owner's words, verbatim")
+    decide.add_argument("--source", metavar="HTTPS_URL", help="RELAYED only, required: the message that contains the words")
+    decide.add_argument("--relayed-by", metavar="NAME", help="RELAYED only, required: the agent that copied the words")
     decide.add_argument("--run", metavar="RUN_ID", help="cite a run of the ledger")
     decide.add_argument("--stop", metavar="STOP_ID", help="cite a stop of stops/")
     decide.add_argument("--pull-request", metavar="URL@COMMIT", help="cite a pull request: https://github.com/<owner>/<repo>/pull/<n>@<40-hex commit>, its merge commit or reviewed head")
@@ -164,6 +169,27 @@ def _status(args: argparse.Namespace) -> int:
         table = ledger.counts(ledger.read_records())
         blocking = stops.open_stops()
         lines = decisions.lines()
+        if args.json:
+            limits = {}
+            if budget.BUDGET_FILE.is_file():
+                dev = table.get(DEV, {})
+                limits["dev_runs"] = {
+                    "allowed": budget.load().dev_runs,
+                    "spent": sum(dev.values()) - dev.get("refused", 0),
+                }
+            print(json.dumps({
+                "schema_version": "kit-status/1",
+                "kit_commit": decisions.kit_commit(),
+                "budget": limits,
+                "runs": table,
+                "open_stops": blocking,
+                "gate": None,
+                "decisions": [
+                    {**{key: line[key] for key in ("id", "mark", "question", "option")}, "level": decisions.level(line)}
+                    for line in lines
+                ],
+            }, ensure_ascii=False))
+            return 0
     except INVALID as error:
         print(f"invalid input: {error}", file=sys.stderr)
         return EXIT_INVALID_INPUT
@@ -177,19 +203,21 @@ def _status(args: argparse.Namespace) -> int:
     if not lines:
         print(f"No decisions in {decisions.LOG}")
     for line in lines:
-        rule = f", rule {line['rule']}" if line["mark"] == "PROXY" else ""
+        rule = f", rule {line['rule']}" if "rule" in line else ""
         print(f"{line['id']} {line['mark']} (level {decisions.level(line)}{rule}): {line['question']} -> {line['option']}")
     return 0
 
 
 def _decide(args: argparse.Namespace) -> int:
     source = {"run": args.run, "stop": args.stop, "pull_request": args.pull_request}
+    mark = args.mark.upper()
     try:
-        if args.mark == "human":
+        if mark in decisions.OWNER_MARKS:
             for marker in markers.read()[1]:
                 print(f"stale conductor marker, ignored: {marker} names a process that is gone", file=sys.stderr)
         line = decisions.append(
-            question=args.question, option=args.option, mark=args.mark.upper(), source=source, by=decisions.process(), rule=args.rule, words_file=args.words_file
+            question=args.question, option=args.option, mark=mark, source=source, by=decisions.process(),
+            rule=args.rule, words_file=args.words_file, words=args.words, source_url=args.source, relayed_by=args.relayed_by,
         )
     except INVALID as error:
         print(f"refused ({getattr(error, 'code', 'INVALID_INPUT')}): {error}", file=sys.stderr)
