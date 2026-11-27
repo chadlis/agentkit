@@ -120,6 +120,7 @@ def test_after_a_conduct_no_file_it_writes_in_the_kit_or_under_ledger_holds_a_he
     found = len(needles)
     assert found == 12
     # The conductor runs from the root of a clone of the kit, so that every file it writes there is one `git status` lists.
+    # The scan covers those files only: a tracked file the conductor does not write, such as the refused aggregate example `contracts/kit-aggregate-1/examples/refused.jsonl`, which carries a held-out Case id on purpose, is out of its scope.
     work = kit_clone(tmp_path)
     monkeypatch.chdir(work)
     # The temporary directory the conductor's Study lives in, outside its working directory.
