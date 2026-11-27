@@ -218,6 +218,20 @@ def test_interruption_after_preflight_keeps_the_reservation_with_no_local_readin
     assert seen == []
 
 
+def test_a_protected_read_requires_an_explicit_total_in_the_budget(synthetic_job, monkeypatch, capsys):
+    read, seen, append = synthetic_job
+    append(reservation("first", 100))
+    path = Path("budget.json")
+    limits = json.loads(path.read_text(encoding="utf-8"))
+    del limits["held_out_total_readings"]
+    path.write_text(json.dumps(limits), encoding="utf-8")
+    monkeypatch.setattr(evaluator_job, "ScriptedAdapter", lambda *args: pytest.fail("opened a fixture without a total limit"))
+    assert read("first") == 2
+    assert "protected readings require held_out_total_readings" in capsys.readouterr().err
+    assert seen == ledger.read_records() == []
+    assert not Path("published").exists()
+
+
 def test_a_malformed_record_is_refused_without_spending(synthetic_job):
     read, seen, append = synthetic_job
     append({**reservation("first", 1), "unexpected": "synthetic"})

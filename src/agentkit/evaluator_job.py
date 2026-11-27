@@ -150,7 +150,7 @@ def read(workload_dir: Path, candidate: str, out: Path, reservations_checkout: P
             permit = authorise(candidate, hypotrail_commit, reservations_checkout, where, limits)
             if any(item.get("candidate") == candidate or item.get("job_run") == where.run for item in spent):
                 raise budget.BudgetRefused("held_out_readings", "this Candidate has had its held-out reading")
-            reservations.verify_frozen_fixture(workload_dir, candidate, permit.first_hypotrail_commit)
+            reservations.verify_frozen_fixture(workload_dir, candidate, permit.first_hypotrail_commit, permit.earlier_candidates)
             adapter = ScriptedAdapter(workload_dir / "fixtures" / f"answers-{candidate}.jsonl")
             configuration = readings.digest(adapter.settings)
             if configuration != permit.configuration_digest:
