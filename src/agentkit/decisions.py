@@ -11,7 +11,7 @@ import subprocess
 from datetime import UTC, datetime
 from pathlib import Path
 
-from agentkit import ledger
+from agentkit import ledger, markers
 
 LOG = Path("decisions") / "log.jsonl"
 STOPS = Path("stops")
@@ -92,7 +92,7 @@ def _words(words_file: Path | None) -> str:
 
 
 def append(*, question: str, option: str, mark: str, source: dict, by: str, rule: str | None = None, words_file: Path | None = None, log: Path = LOG) -> dict:
-    """Appends one line to the log and returns it. `HUMAN` is refused unless `by` is `cli` and this process is unmarked."""
+    """Appends one line to the log and returns it. `HUMAN` is refused unless `by` is `cli`, this process is unmarked, and no conductor marker names a live process."""
     if not question.strip() or not option.strip():
         raise DecisionError("DECISION_EMPTY", "a decision names its question and the option kept")
     if by not in PROCESSES:
@@ -108,6 +108,12 @@ def append(*, question: str, option: str, mark: str, source: dict, by: str, rule
         writer = by if by != "cli" else process()
         if writer != "cli":
             raise DecisionError("HUMAN_REFUSED", f"the {writer}'s process cannot write HUMAN")
+        try:
+            running, _ = markers.read()
+        except markers.MarkerError as error:
+            raise DecisionError("CONDUCTOR_MARKER_UNREADABLE", f"a conductor marker cannot be read, so HUMAN is refused: {error}") from None
+        if running:
+            raise DecisionError("CONDUCTOR_RUNNING", f"a conductor's loop is running ({', '.join(map(str, running))}): HUMAN is refused while it runs")
         if rule is not None:
             raise DecisionError("HUMAN_WITH_RULE", "a HUMAN decision holds the person's words, not a rule")
     else:

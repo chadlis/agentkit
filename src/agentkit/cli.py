@@ -5,7 +5,7 @@ import os
 import sys
 from pathlib import Path
 
-from agentkit import budget, decisions, harness, ledger, stops
+from agentkit import budget, conductor, decisions, harness, ledger, markers, stops
 from agentkit.adapters import live
 from agentkit.adapters.scripted import ScriptedAdapter
 from agentkit.cases import WorkloadError
@@ -20,7 +20,7 @@ EXIT_BUDGET = 8
 EXIT_HELD_OUT_REFUSED = 9
 RUN_OPTIONS = ("workload_dir", "partition", "adapter")
 ADAPTER_OPTIONS = ("fixture", "model", "repeats")
-INVALID = (WorkloadError, ledger.LedgerError, budget.BudgetError, stops.StopsError, decisions.DecisionError)
+INVALID = (WorkloadError, ledger.LedgerError, budget.BudgetError, stops.StopsError, decisions.DecisionError, markers.MarkerError)
 
 
 def add_run_options(parser: argparse.ArgumentParser, required: bool) -> None:
@@ -62,6 +62,12 @@ def build_parser() -> argparse.ArgumentParser:
     cite = commands.add_parser("cite", help="print the kit-citation/1 line of a decision that exists at the commit checked out")
     cite.add_argument("id", metavar="K-NNNN")
     cite.set_defaults(handler=_cite)
+    conduct = commands.add_parser("conduct", help="the automatic mode: run each Configuration on the dev set under the budget and the stops, compare each with the Control in Hypotrail, write PROXY decisions, and park on a stop or a limit")
+    conduct.add_argument("--workload-dir", required=True, type=Path, metavar="DIR", help="the Workload directory of a Hypotrail checkout (for example hypotrail/examples/chinook_prose)")
+    conduct.add_argument("--set", required=True, choices=["dev", "public_check"], dest="partition", help="dev; the held-out set (public_check) is refused with exit 9")
+    conduct.add_argument("--configurations", required=True, metavar="A,B", help="the scripted fixtures to try, in order; the first is the Control")
+    conduct.add_argument("--adapter", choices=["scripted", "live"], default="scripted", help="scripted only: the conductor makes no live call, and live is refused with exit 2")
+    conduct.set_defaults(handler=_conduct)
     return parser
 
 
@@ -174,6 +180,9 @@ def _status(args: argparse.Namespace) -> int:
 def _decide(args: argparse.Namespace) -> int:
     source = {"run": args.run, "stop": args.stop, "pull_request": args.pull_request}
     try:
+        if args.mark == "human":
+            for marker in markers.read()[1]:
+                print(f"stale conductor marker, ignored: {marker} names a process that is gone", file=sys.stderr)
         line = decisions.append(
             question=args.question, option=args.option, mark=args.mark.upper(), source=source, by=decisions.process(), rule=args.rule, words_file=args.words_file
         )
@@ -192,6 +201,32 @@ def _cite(args: argparse.Namespace) -> int:
         return EXIT_INVALID_INPUT
     print(citation)
     return 0
+
+
+CONDUCT_EXITS = {
+    conductor.DONE: 0,
+    conductor.STOP: EXIT_STOP,
+    conductor.STOP_OPEN: EXIT_OPEN_STOP,
+    conductor.BUDGET: EXIT_BUDGET,
+    conductor.HELD_OUT: EXIT_HELD_OUT_REFUSED,
+    conductor.RUN_STOPPED: EXIT_RUN_FAILED,
+    conductor.HYPOTRAIL: EXIT_RUN_FAILED,
+    conductor.INVALID_INPUT: EXIT_INVALID_INPUT,
+}
+
+
+def _conduct(args: argparse.Namespace) -> int:
+    if args.adapter != "scripted":
+        print("invalid input: the conductor runs scripted fixtures only and makes no live call", file=sys.stderr)
+        return EXIT_INVALID_INPUT
+    try:
+        configurations = conductor.check_configurations(args.configurations)
+    except WorkloadError as error:
+        print(f"invalid input: {error}", file=sys.stderr)
+        return EXIT_INVALID_INPUT
+    journal = conductor.conduct(args.workload_dir, args.partition, configurations)
+    print(f"Conductor {journal.conduct_id}: {journal.outcome}, {journal.detail} (note in {conductor.CONDUCTOR_DIR / journal.conduct_id}-note.md)", file=sys.stdout if journal.outcome == conductor.DONE else sys.stderr)
+    return CONDUCT_EXITS[journal.outcome]
 
 
 def main(argv: list[str] | None = None) -> int:
