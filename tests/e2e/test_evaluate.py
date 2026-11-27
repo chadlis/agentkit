@@ -122,7 +122,7 @@ def test_a_reading_in_an_imitated_evaluator_job_publishes_an_aggregate_report_th
     out = tmp_path / "a8-published"
     done = evaluate(workload_dir, out)
     assert done.returncode == 0, done.stdout + done.stderr
-    assert [path.name for path in published(out)] == ["aggregate.json", "aggregate.md"]
+    assert [path.name for path in published(out)] == ["aggregate.json", "aggregate.md", "reading.jsonl"]
     aggregate = json.loads((out / "aggregate.json").read_text(encoding="utf-8"))
     errors = [error.message for error in jsonschema.Draft202012Validator(json.loads(SCHEMA.read_text(encoding="utf-8"))).iter_errors(aggregate)]
     assert errors == []
@@ -153,7 +153,7 @@ def test_no_published_file_holds_a_held_out_question_case_id_reference_text_enti
     done = evaluate(copy, out, candidate=HELD_OUT_FIXTURE)
     assert done.returncode == 0, done.stdout + done.stderr
     files = published(out)
-    assert len(files) == 2
+    assert len(files) == 3
     # The answers went through the job: every held-out pair is produced.
     assert json.loads((out / "aggregate.json").read_text(encoding="utf-8"))["counts"] == {"units": 6, "produced": 6, "failed": 0, "missing": 0}
     holding = files_holding(needles, files)
@@ -193,7 +193,7 @@ def job(monkeypatch, extra: dict | None = None) -> None:
         monkeypatch.setenv(name, value)
 
 
-def test_a_reading_whose_hypotrail_fails_exits_1_spends_the_reading_publishes_nothing_and_removes_its_temporary_directory(workload_dir, tmp_path, monkeypatch):
+def test_a_reading_whose_hypotrail_fails_exits_1_spends_the_reading_publishes_its_record_and_removes_its_temporary_directory(workload_dir, tmp_path, monkeypatch):
     job(monkeypatch)
     temporary = tmp_path.parent / f"{tmp_path.name}-a8-tmp"
     temporary.mkdir()
@@ -202,7 +202,7 @@ def test_a_reading_whose_hypotrail_fails_exits_1_spends_the_reading_publishes_no
     out = tmp_path / "a8-published"
     assert main(["evaluate", "--workload-dir", str(workload_dir), "--candidate", "concise", "--out", str(out)]) == 1
     assert [(record["set"], record["status"], record.get("reason")) for record in read_records()] == [("public_check", "failed", "hypotrail")]
-    assert published(out) == []
+    assert [path.name for path in published(out)] == ["reading.jsonl"]
     assert list(temporary.iterdir()) == []
 
 
@@ -259,6 +259,7 @@ def test_a_reading_sent_sigterm_removes_its_temporary_directory_and_closes_the_r
     assert list(temporary.iterdir()) == []
     assert process.returncode == 128 + signal.SIGTERM
     assert [(record["status"], record.get("reason")) for record in read_records()] == [("failed", "interrupted")]
+    assert [path.name for path in published(tmp_path / "a8-published")] == ["reading.jsonl"]
 
 
 def hypotrail_failing_at(tmp_path: Path, failing: str, stderr: str, assessment: dict | None = None) -> dict:
@@ -320,7 +321,7 @@ def test_an_error_after_the_reading_is_counted_closes_it_failed_and_shows_no_hel
     assert [(record["set"], record["status"], record.get("reason")) for record in read_records()] == [("public_check", "failed", "error")]
     shown = (case_id in printed.out) + (case_id in printed.err)
     assert shown == 0
-    assert published(out) == []
+    assert [path.name for path in published(out)] == ["reading.jsonl"]
     assert list(temporary.iterdir()) == []
 
 
@@ -329,7 +330,7 @@ def test_a_key_error_after_the_reading_is_counted_closes_it_failed_with_no_trace
     done = evaluate(workload_dir, tmp_path / "a8-published", env=fake_hypotrail(tmp_path, "print('{}')\n"))
     assert [(record["set"], record["status"], record.get("reason")) for record in read_records()] == [("public_check", "failed", "error")]
     assert (done.returncode, "Traceback" in done.stderr) == (1, False)
-    assert published(tmp_path / "a8-published") == []
+    assert [path.name for path in published(tmp_path / "a8-published")] == ["reading.jsonl"]
 
 
 def test_a_fixture_line_the_job_cannot_replay_is_refused_with_exit_2_without_naming_its_held_out_case(workload_dir, tmp_path, monkeypatch, capsys):

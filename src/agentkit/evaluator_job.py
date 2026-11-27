@@ -1,8 +1,8 @@
 """The evaluator job's held-out reading (`docs/design.md`, sections 1 and 3): the one caller of `agentkit.evaluator.entry_point()`.
 
-It reads one frozen Configuration, a scripted fixture, on the held-out Partition. The harness's pairs and answers, the export and Hypotrail's Study live in a temporary directory outside the working directory, which the reading deletes when it ends, on an error or SIGTERM too; SIGKILL leaves it. Hypotrail runs as a subprocess: `init`, `import agent`, `assess --scorer text_facts_v1` and `report`. Only the aggregate report leaves the reading: `aggregate.json` (`kit-aggregate/1`) and `aggregate.md`, a short page made from it alone.
+It reads one frozen Configuration, a scripted fixture, on the held-out Partition. The harness's pairs and answers, the export and Hypotrail's Study live in a temporary directory outside the working directory, which the reading deletes when it ends, on an error or SIGTERM too; SIGKILL leaves it. Hypotrail runs as a subprocess: `init`, `import agent`, `assess --scorer text_facts_v1` and `report`. The aggregate report and a separate metadata line leave the reading.
 
-The kit's ledger counts the reading in a record that lists no pair, before the first adapter call, so that a second reading of the same Configuration in the same working directory is refused by the budget. Once counted, the reading is closed `failed` by any error, SIGINT or SIGTERM. The reading writes no decision.
+The kit's ledger counts the reading in a record that lists no pair, before the first adapter call, and the committed readings record carries Candidate and total limits across evaluator jobs. Once counted, the reading is closed `failed` by any error, SIGINT or SIGTERM. The reading writes no decision.
 
 What it prints never names a held-out Case: an error of Hypotrail is reported by its command and exit code only, a fixture error without its pair, and any other error after the count by its type only."""
 
@@ -17,7 +17,7 @@ from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
 
-from agentkit import evaluator, harness, ledger
+from agentkit import budget, evaluator, harness, ledger, readings
 from agentkit.adapters.scripted import NAME as SCRIPTED, FixtureError, ScriptedAdapter
 from agentkit.cases import WorkloadError
 from agentkit.conductor import CONFIGURATION, HypotrailFailed, call_hypotrail
@@ -112,7 +112,7 @@ def _terminated(number: int, frame) -> None:
 def read(workload_dir: Path, candidate: str, out: Path) -> dict:
     """Reads `candidate` on the held-out Partition under the evaluator entry point, writes the published files in `out`, and returns `aggregate.json`.
 
-    Outside a job of the evaluator workflow, the reading is recorded `refused` with no pair and raises `HeldOutRefused`, before the fixture is read. A reading the report could not name (an `out` that holds files, a job variable or a checkout commit missing, a candidate that is no fixture) is invalid input and records nothing. An open stop or a spent budget of held-out readings records it `refused` and raises, with no adapter call. Once counted, any error, SIGINT or SIGTERM closes it `failed`, spent, and publishes nothing: a failing Hypotrail command raises `HypotrailFailed`, any other error `ReadingFailed`."""
+    Outside a job of the evaluator workflow, the reading is recorded `refused` with no pair and raises `HeldOutRefused`, before the fixture is read. A reading the report could not name (an `out` that holds files, a job variable or a checkout commit missing, a candidate that is no fixture) is invalid input and records nothing. An open stop or a spent budget of held-out readings records it `refused` and raises, with no adapter call. Once counted, any error, SIGINT or SIGTERM closes it `failed`, spent, and retains its metadata: a failing Hypotrail command raises `HypotrailFailed`, any other error `ReadingFailed`."""
     if not evaluator.in_evaluator_job():
         harness.refuse_held_out(evaluator.HELD_OUT, SCRIPTED, None)
     with evaluator.entry_point():
@@ -122,15 +122,25 @@ def read(workload_dir: Path, candidate: str, out: Path) -> dict:
             raise WorkloadError(f"{out} holds files: the published directory is empty or new, so that only the aggregate report leaves the job")
         where = job()
         hypotrail_commit = checkout_commit(workload_dir)
+        recorded = readings.load()
         try:
             adapter = ScriptedAdapter(workload_dir / "fixtures" / f"answers-{candidate}.jsonl")
         except FixtureError as error:
             raise WorkloadError(error.keyless) from None
         limits, _, records = harness.admit(evaluator.HELD_OUT, adapter)
-        number = 1 + sum(record["set"] == evaluator.HELD_OUT and record["status"] != "refused" and record["configuration"] == adapter.settings for record in records)
+        try:
+            readings.check(recorded, records, candidate, adapter.settings, limits.held_out_total_readings)
+        except budget.BudgetRefused as refusal:
+            ledger.refuse_run(ledger.LEDGER_DIR, partition=evaluator.HELD_OUT, adapter=SCRIPTED, configuration=adapter.settings, reason=refusal.reason)
+            raise
+        configuration = readings.digest(adapter.settings)
+        readings.write(out, candidate, configuration, where.commit, where.run, "failed")
+        reading_id = ledger.open_run(
+            ledger.LEDGER_DIR, partition=evaluator.HELD_OUT, adapter=SCRIPTED, configuration=adapter.settings,
+            pairs=[], candidate=candidate, job_run=where.run,
+        )
         # SIGTERM raises, as SIGINT does, so that the reading is closed and the `finally` below deletes the temporary directory.
         previous = signal.signal(signal.SIGTERM, _terminated)
-        reading_id = ledger.open_run(ledger.LEDGER_DIR, partition=evaluator.HELD_OUT, adapter=SCRIPTED, configuration=adapter.settings, pairs=[])
         work = None
         try:
             work = Path(tempfile.mkdtemp(prefix="agentkit-evaluator-"))
@@ -139,15 +149,15 @@ def read(workload_dir: Path, candidate: str, out: Path) -> dict:
                 "schema_version": SCHEMA_VERSION,
                 "kit": {"repository": where.repository, "commit": where.commit, "candidate": candidate},
                 "partition": evaluator.HELD_OUT,
-                "reading": {"number": number, "allowed": limits.held_out_readings, "job_run": where.run, "actor": where.actor},
+                "reading": {"number": 1, "allowed": 1, "job_run": where.run, "actor": where.actor},
                 "counts": {"units": counts.total(), "produced": counts["produced"], "failed": counts["failed"], "missing": counts["missing"]},
                 "aggregates": hypotrail.pop("aggregates"),
                 "hypotrail": {"commit": hypotrail_commit, **hypotrail, "comparison_id": None},
                 "decision": None,
             }
-            out.mkdir(parents=True, exist_ok=True)
             (out / "aggregate.json").write_text(json.dumps(aggregate, indent=2) + "\n", encoding="utf-8")
             (out / "aggregate.md").write_text(page(aggregate), encoding="utf-8")
+            readings.write(out, candidate, configuration, where.commit, where.run, "completed")
         except BaseException as error:
             failure = HYPOTRAIL if isinstance(error, HypotrailFailed) else INTERRUPTED if isinstance(error, (KeyboardInterrupt, SystemExit)) else ERROR
             ledger.close_run(ledger.LEDGER_DIR, reading_id, "failed", failure)
