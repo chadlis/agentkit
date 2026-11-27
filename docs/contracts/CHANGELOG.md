@@ -7,3 +7,4 @@ The contracts this repository owns, under `contracts/` (all but `agent-answers-1
 | 2026-11-26 | `kit-decision/1`, `kit-citation/1` | 1 | First written, from C4 of D-172 | chadlis/agentkit#11 |
 | 2026-11-26 | `kit-aggregate/1` | 1 | First written, from C5 of D-172 | chadlis/agentkit#11 |
 | 2026-11-26 | `kit-status/1` | 1 | First written, from C6 of D-172 | chadlis/agentkit#11 |
+| 2026-11-27 | `kit-aggregate/1` | 1 | A dated note in the README: the refusal of a second reading and of a candidate made after the first is not yet enforced across job runs (chadlis/agentkit#25; the job's Decision is chadlis/agentkit#26; the kit log line for these choices is held for the owner); the schema is unchanged | chadlis/agentkit#24 |

@@ -236,6 +236,12 @@ def test_the_marker_is_removed_when_the_loop_ends_on_an_error(workload_dir, monk
     assert "hypotrail" in note()
 
 
+def test_a_hypotrail_failure_in_the_dev_loop_keeps_hypotrail_stderr_in_the_note(workload_dir, monkeypatch):
+    monkeypatch.setattr(conductor, "hypotrail_command", lambda: [sys.executable, "-c", "import sys; sys.stderr.write('a8 the stderr of a dev failure'); sys.exit(1)"])
+    assert main(["conduct", "--workload-dir", str(workload_dir), "--set", "dev", "--configurations", "concise,verbose"]) == 1
+    assert "hypotrail init --workload exited 1: a8 the stderr of a dev failure" in note()
+
+
 def test_a_conductor_sent_sigterm_mid_loop_removes_its_temporary_study_and_its_marker(workload_dir, tmp_path):
     import signal
     import time

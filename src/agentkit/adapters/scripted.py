@@ -11,6 +11,14 @@ ORIGIN = "authored_fixture"
 ANSWER_KEYS = ("observation_status", "raw_answer", "outcome", "usage", "metadata")
 
 
+class FixtureError(WorkloadError):
+    """A fixture line cannot be replayed. `keyless` says why without naming the line's pair, for a reader who may not see the Case."""
+
+    def __init__(self, message: str, keyless: str):
+        super().__init__(message)
+        self.keyless = keyless
+
+
 @dataclass(frozen=True)
 class Answer:
     fields: dict
@@ -25,11 +33,11 @@ class ScriptedAdapter:
         for row in read_json_lines(fixture):
             key = (row.get("case_id"), row.get("repeat"))
             if not isinstance(key[0], str) or not isinstance(key[1], int) or key in self._answers:
-                raise WorkloadError(f"{fixture}: each line needs a case_id and a repeat, once per pair ({key!r})")
+                raise FixtureError(f"{fixture}: each line needs a case_id and a repeat, once per pair ({key!r})", f"{fixture}: each line needs a case_id and a repeat, once per pair")
             if row.get("observation_status") == "produced" and not isinstance(row.get("raw_answer"), str):
-                raise WorkloadError(f"{fixture}: the produced line {key!r} has no raw_answer")
+                raise FixtureError(f"{fixture}: the produced line {key!r} has no raw_answer", f"{fixture}: a produced line has no raw_answer")
             if row.get("observation_status") == "failed" and not (isinstance(row.get("metadata"), dict) and isinstance(row["metadata"].get("reason"), str) and row["metadata"]["reason"]):
-                raise WorkloadError(f"{fixture}: the failed line {key!r} has no metadata.reason")
+                raise FixtureError(f"{fixture}: the failed line {key!r} has no metadata.reason", f"{fixture}: a failed line has no metadata.reason")
             self._answers[key] = {name: row[name] for name in ANSWER_KEYS if name in row}
             settings.append(row.get("settings"))
         if any(item != settings[0] for item in settings):

@@ -1,0 +1,45 @@
+name: evaluator
+
+# The held-out reading (docs/design.md, sections 1 and 3): started by a person, by hand, in the protected environment `held-out`.
+# Only the aggregate report leaves the job; the per-Case files stay on its runner.
+on:
+  workflow_dispatch:
+    inputs:
+      candidate:
+        description: "The frozen Configuration to read on the held-out set: a scripted fixture name (fixtures/answers-NAME.jsonl)"
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  held-out-reading:
+    runs-on: ubuntu-latest
+    environment: held-out
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - id: pin
+        run: echo "ref=$(tr -d '[:space:]' < hypotrail.pin)" >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@v4
+        with:
+          repository: chadlis/hypotrail
+          ref: ${{ steps.pin.outputs.ref }}
+          path: hypotrail
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.13"
+      - run: uv sync --locked
+      - run: uv pip install ./hypotrail
+      # The scripted adapter makes no model call, and the job holds no key (AGENTS.md).
+      - env:
+          CANDIDATE: ${{ inputs.candidate }}
+        run: uv run --locked --no-sync agentkit evaluate --workload-dir hypotrail/examples/chinook_prose --candidate "$CANDIDATE" --out published
+      - run: cat published/aggregate.md >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: aggregate
+          path: published/
+          if-no-files-found: error

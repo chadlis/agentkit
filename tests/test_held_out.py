@@ -121,3 +121,14 @@ def test_a_refused_run_marks_a_stale_running_record_failed(workload_dir, monkeyp
     assert run_held_out(workload_dir) == 9
     assert [(record["set"], record["status"]) for record in read_records()] == [("dev", "failed"), ("public_check", "refused")]
     assert read_records()[0]["end_time"]
+
+
+def test_a_held_out_reading_from_a_plain_process_exits_9_with_a_refused_record_no_adapter_call_and_nothing_published(workload_dir, monkeypatch, tmp_path):
+    plain_process(monkeypatch)
+    calls = count_adapter_calls(monkeypatch)
+    out = tmp_path / "a8-published"
+    assert main(["evaluate", "--workload-dir", str(workload_dir), "--candidate", "concise", "--out", str(out)]) == 9
+    assert [(record["set"], record["adapter"], record["status"], record["pairs"]) for record in read_records()] == [("public_check", "scripted", "refused", [])]
+    adapter_calls = len(calls)
+    assert adapter_calls == 0
+    assert not out.exists()
