@@ -79,6 +79,21 @@
           "items": {
             "type": "string"
           }
+        },
+        "answers": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "mark": {
+                "enum": [
+                  "HUMAN",
+                  "PROXY",
+                  "RELAYED"
+                ]
+              }
+            }
+          }
         }
       }
     },
@@ -101,7 +116,8 @@
           "mark": {
             "enum": [
               "HUMAN",
-              "PROXY"
+              "PROXY",
+              "RELAYED"
             ]
           },
           "level": {

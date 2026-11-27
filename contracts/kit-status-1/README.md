@@ -15,7 +15,7 @@ JSON Schema 2020-12.
 ## Rules a schema cannot say
 
 - `status` writes nothing.
-- A decision's `level` is derived as in `kit-decision/1`; a decision line carries no words.
+- A decision's `level` is derived as in `kit-decision/1`; a decision line carries no words. A gate answer identifies its source line's mark as `HUMAN`, `RELAYED` or `PROXY` when that line exists.
 - An exit number means something only with its repository: the guide reads the `code` of `--json`, never the number alone.
 
 ## Examples
