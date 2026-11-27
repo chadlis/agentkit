@@ -6,7 +6,7 @@ import os
 import re
 from pathlib import Path
 
-from agentkit import budget, evaluator
+from agentkit import budget
 from agentkit.conductor import CONFIGURATION
 
 RECORD_FILE = Path("readings.jsonl")
@@ -63,17 +63,24 @@ def load(path: Path = RECORD_FILE) -> list[dict]:
     return items
 
 
-def check(recorded: list[dict], local: list[dict], candidate: str, settings, total: int) -> None:
-    """Check the candidate and overall budget across the committed record and this checkout."""
-    spent = [item for item in local if item["set"] == evaluator.HELD_OUT and item["status"] != "refused"]
-    configuration = digest(settings)
-    if any(item["candidate"] == candidate or item["configuration_digest"] == configuration for item in recorded) or any(
-        item.get("candidate") == candidate or item["configuration"] == settings for item in spent
-    ):
+def check_limits(recorded: list[dict], spent: list[dict], candidate: str, limits: budget.Budget) -> None:
+    """Check what the Candidate's name and the prior reading records establish."""
+    if limits.held_out_readings == 0:
+        raise budget.BudgetRefused("held_out_readings", "the budget allows no held-out reading of this Candidate")
+    if any(item["candidate"] == candidate for item in recorded) or any(item.get("candidate") == candidate for item in spent):
         raise budget.BudgetRefused("held_out_readings", "this Candidate has had its held-out reading")
     committed_jobs = {item["job_run"] for item in recorded}
+    total = limits.held_out_total_readings
     if len(recorded) + sum(item.get("job_run") not in committed_jobs for item in spent) >= total:
         raise budget.BudgetRefused("held_out_total_readings", f"the {total} held-out readings are spent")
+
+
+def check_configuration(recorded: list[dict], spent: list[dict], settings: dict | None) -> str:
+    """Refuse a previously read Configuration under a different name and return its digest otherwise."""
+    configuration = digest(settings)
+    if any(item["configuration_digest"] == configuration for item in recorded) or any(item["configuration"] == settings for item in spent):
+        raise budget.BudgetRefused("held_out_readings", "this Candidate has had its held-out reading")
+    return configuration
 
 
 def write(out: Path, candidate: str, configuration: str, job_commit: str, job_run: str, status: str) -> None:

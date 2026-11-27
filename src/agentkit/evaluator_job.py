@@ -123,17 +123,19 @@ def read(workload_dir: Path, candidate: str, out: Path) -> dict:
         where = job()
         hypotrail_commit = checkout_commit(workload_dir)
         recorded = readings.load()
+        limits, _, records = harness.prepare_run(evaluator.HELD_OUT, SCRIPTED, None)
+        spent = [item for item in records if item["set"] == evaluator.HELD_OUT and item["status"] != "refused"]
+        settings = None
         try:
+            readings.check_limits(recorded, spent, candidate, limits)
             adapter = ScriptedAdapter(workload_dir / "fixtures" / f"answers-{candidate}.jsonl")
+            settings = adapter.settings
+            configuration = readings.check_configuration(recorded, spent, settings)
         except FixtureError as error:
             raise WorkloadError(error.keyless) from None
-        limits, _, records = harness.admit(evaluator.HELD_OUT, adapter)
-        try:
-            readings.check(recorded, records, candidate, adapter.settings, limits.held_out_total_readings)
         except budget.BudgetRefused as refusal:
-            ledger.refuse_run(ledger.LEDGER_DIR, partition=evaluator.HELD_OUT, adapter=SCRIPTED, configuration=adapter.settings, reason=refusal.reason)
+            ledger.refuse_run(ledger.LEDGER_DIR, partition=evaluator.HELD_OUT, adapter=SCRIPTED, configuration=settings, reason=refusal.reason)
             raise
-        configuration = readings.digest(adapter.settings)
         readings.write(out, candidate, configuration, where.commit, where.run, "failed")
         reading_id = ledger.open_run(
             ledger.LEDGER_DIR, partition=evaluator.HELD_OUT, adapter=SCRIPTED, configuration=adapter.settings,

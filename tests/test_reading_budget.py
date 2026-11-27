@@ -106,6 +106,29 @@ def test_three_committed_readings_refuse_a_fourth_from_an_empty_ledger(synthetic
     assert [row["reason"] for row in ledger.read_records()] == ["held_out_total_readings"]
 
 
+@pytest.mark.parametrize(
+    ("names", "candidate", "reason"),
+    [
+        (("first",), "first", "held_out_readings"),
+        (("first", "second", "third"), "fourth", "held_out_total_readings"),
+    ],
+)
+def test_a_known_budget_refusal_happens_before_a_malformed_fixture_is_read(synthetic_job, monkeypatch, names, candidate, reason):
+    read, seen = synthetic_job
+    commit_readings(*(record(name, run) for run, name in enumerate(names, start=1)))
+    fixture_reads = []
+
+    def malformed(fixture):
+        fixture_reads.append(fixture)
+        raise evaluator_job.FixtureError("malformed synthetic fixture", "malformed synthetic fixture")
+
+    monkeypatch.setattr(evaluator_job, "ScriptedAdapter", malformed)
+    assert read(candidate) == 8
+    assert fixture_reads == seen == []
+    assert [row["reason"] for row in ledger.read_records()] == [reason]
+    assert not Path("published").exists()
+
+
 def test_a_renamed_configuration_cannot_be_read_again(synthetic_job):
     read, seen = synthetic_job
     commit_readings(record("old-name", 1, configuration=settings("new-name")))
