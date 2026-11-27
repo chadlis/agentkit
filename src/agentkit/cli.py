@@ -47,6 +47,19 @@ def build_parser() -> argparse.ArgumentParser:
     export.set_defaults(handler=_export)
     status = commands.add_parser("status", help="print, read-only, the ledger's runs per set and per status")
     status.set_defaults(handler=_status)
+    decide = commands.add_parser("decide", help="append one decision to decisions/log.jsonl, marked PROXY with its rule or HUMAN with a person's words file")
+    decide.add_argument("--question", required=True, metavar="TEXT", help="what is decided: which Configuration to keep trying, whether to resume after a stop")
+    decide.add_argument("--option", required=True, metavar="TEXT", help="the option kept")
+    decide.add_argument("--mark", required=True, choices=["proxy", "human"])
+    decide.add_argument("--rule", metavar="NAME@VERSION", help="PROXY only, required: the rule applied")
+    decide.add_argument("--words-file", type=Path, metavar="FILE", help="HUMAN only, required: a file the person wrote, read whole")
+    decide.add_argument("--run", metavar="RUN_ID", help="cite a run of the ledger")
+    decide.add_argument("--stop", metavar="STOP_ID", help="cite a stop of stops/")
+    decide.add_argument("--pull-request", metavar="URL@COMMIT", help="cite a pull request: https://github.com/<owner>/<repo>/pull/<n>@<40-hex merge commit>")
+    decide.set_defaults(handler=_decide)
+    cite = commands.add_parser("cite", help="print the kit-citation/1 line of a decision that exists at the commit checked out")
+    cite.add_argument("id", metavar="K-NNNN")
+    cite.set_defaults(handler=_cite)
     return parser
 
 
@@ -127,6 +140,14 @@ def _status(args: argparse.Namespace) -> int:
         total = sum(row.values())
         detail = ", ".join(f"{count} {status}" for status, count in row.items())
         print(f"{partition}: {total} {'run' if total == 1 else 'runs'} ({detail})")
+    return 0
+
+
+def _decide(args: argparse.Namespace) -> int:
+    return 0
+
+
+def _cite(args: argparse.Namespace) -> int:
     return 0
 
 
