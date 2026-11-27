@@ -9,6 +9,8 @@ from pathlib import Path
 from agentkit import ledger
 
 CONDUCTOR_DIR = ledger.LEDGER_DIR / "conductor"
+# The conductor sets it, as an absolute path, for itself and its children, so that a child started in another directory finds the marker.
+MARKER_VARIABLE = "AGENTKIT_CONDUCTOR_DIR"
 
 
 class MarkerError(ValueError):
@@ -16,7 +18,21 @@ class MarkerError(ValueError):
 
 
 def path(conduct_id: str) -> Path:
-    return CONDUCTOR_DIR / f"{conduct_id}.json"
+    return CONDUCTOR_DIR.resolve() / f"{conduct_id}.json"
+
+
+def anchor() -> None:
+    """Names the marker directory of this working directory, resolved once, in the environment this process and its children inherit."""
+    os.environ[MARKER_VARIABLE] = str(CONDUCTOR_DIR.resolve())
+
+
+def directories() -> list[Path]:
+    """Where markers are looked for: the working directory's, and the one an ancestor conductor named in the environment."""
+    found = [CONDUCTOR_DIR.resolve()]
+    named = os.environ.get(MARKER_VARIABLE)
+    if named and Path(named).resolve() not in found:
+        found.append(Path(named).resolve())
+    return found
 
 
 def write(conduct_id: str) -> Path:
@@ -52,6 +68,6 @@ def _pid(marker: Path) -> int:
 
 def read() -> tuple[list[Path], list[Path]]:
     """The markers whose process is alive, and the stale ones. Reads only."""
-    found = sorted(CONDUCTOR_DIR.glob("*.json"))
+    found = sorted(marker for directory in directories() for marker in directory.glob("*.json"))
     live = [marker for marker in found if _alive(_pid(marker))]
     return live, [marker for marker in found if marker not in live]

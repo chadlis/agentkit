@@ -18,7 +18,7 @@ from agentkit.cli import main
 from agentkit.ledger import read_records
 from agentkit.rules import KEEP_HIGHER_DEV_SCORE
 from test_budget import write_budget
-from test_dev_end_to_end import agentkit_command, hypotrail_command
+from test_dev_end_to_end import agentkit_command, hypotrail_command, kit_clone
 
 CONDUCTOR_DIR = Path("ledger") / "conductor"
 SITECUSTOMIZE = '''
@@ -26,14 +26,15 @@ import os, sys
 
 _log = os.environ["AGENTKIT_AUDIT_LOG"]
 _references = os.environ["AGENTKIT_AUDIT_WATCH"]
-_conductor = os.environ["AGENTKIT_AUDIT_CONDUCTOR"]
 
 
 def _hook(event, args):
     if event != "open" or not isinstance(args[0], (str, bytes, os.PathLike)) or os.path.basename(sys.argv[0]) != "agentkit":
         return
     path = os.path.realpath(os.fsdecode(args[0]))
-    inside = path.startswith(_conductor + os.sep) and "study" in os.path.relpath(path, _conductor).split(os.sep)
+    parts = path.split(os.sep)
+    # The conductor's Study lives in a temporary directory named agentkit-<conduct_id>-...
+    inside = "study" in parts and any(part.startswith("agentkit-c-") for part in parts)
     if path == _references or inside:
         with open(_log, "a", encoding="utf-8") as log:
             log.write(f"open {path}\\n")
@@ -63,7 +64,6 @@ def conduct(workload_dir: Path, configurations: str, *extra: str, env: dict | No
     environment["PYTHONPATH"] = os.pathsep.join(filter(None, [str(audit.resolve()), environment.get("PYTHONPATH")]))
     environment["AGENTKIT_AUDIT_LOG"] = str((audit / "opens.log").resolve())
     environment["AGENTKIT_AUDIT_WATCH"] = os.path.realpath(workload_dir / workload["references"])
-    environment["AGENTKIT_AUDIT_CONDUCTOR"] = os.path.realpath(CONDUCTOR_DIR)
     command = [*agentkit_command(), "conduct", "--workload-dir", str(workload_dir), "--set", "dev", "--configurations", configurations, *extra]
     return subprocess.run(command, env=environment, capture_output=True, text=True, timeout=600)
 
@@ -99,6 +99,42 @@ def test_conducting_two_configurations_closes_two_runs_and_writes_one_proxy_line
     assert all(text in written for text in ("r-0001", "r-0002", line["id"]))
     assert markers() == []
     assert opened() == []
+
+
+def held_out_needles(workload_dir: Path) -> list[str]:
+    """Every held-out Case id and the reference text of each held-out Case, as the twin holds them."""
+    workload = json.loads((workload_dir / "workload.json").read_text(encoding="utf-8"))
+    held_out = [json.loads(text)["case_id"] for text in (workload_dir / workload["cases"]["public_check"]).read_text(encoding="utf-8").splitlines() if text.strip()]
+    references = [json.loads(text) for text in (workload_dir / workload["references"]).read_text(encoding="utf-8").splitlines() if text.strip()]
+    return held_out + [reference["reference_text"] for reference in references if reference["case_id"] in held_out]
+
+
+def files_holding(needles: list[str], files: list[Path]) -> int:
+    """How many of `files` hold any of `needles`; a count only, so that a failure shows no held-out text."""
+    return sum(any(needle in path.read_text(encoding="utf-8", errors="replace") for needle in needles) for path in files if path.is_file())
+
+
+def test_after_a_conduct_no_file_it_writes_in_the_kit_or_under_ledger_holds_a_held_out_case_id_or_reference_text(workload_dir, tmp_path, monkeypatch):
+    hypotrail_command()
+    needles = held_out_needles(workload_dir)
+    found = len(needles)
+    assert found == 12
+    # The conductor runs from the root of a clone of the kit, so that every file it writes there is one `git status` lists.
+    work = kit_clone(tmp_path)
+    monkeypatch.chdir(work)
+    # The temporary directory the conductor's Study lives in, outside its working directory.
+    temporary = tmp_path.parent / f"{tmp_path.name}-a7-tmp"
+    temporary.mkdir()
+    done = conduct(workload_dir, "concise,verbose", env={"TMPDIR": str(temporary)})
+    assert done.returncode == 0, done.stdout + done.stderr
+    listed = subprocess.run(["git", "status", "--porcelain", "--ignored", "--untracked-files=all"], capture_output=True, text=True, check=True).stdout.splitlines()
+    written = [Path(line[3:]) for line in listed if not line[3:].startswith("a7-audit/")]
+    assert any(path.parts[:2] == ("ledger", "conductor") for path in written)
+    holding = files_holding(needles, written)
+    assert holding == 0
+    assert list(temporary.iterdir()) == []
+    [comparison] = [json.loads(text) for text in (CONDUCTOR_DIR / "c-0001-comparisons.jsonl").read_text(encoding="utf-8").splitlines()]
+    assert (comparison["control_run"], comparison["candidate_run"], comparison["delta"]["control"], comparison["delta"]["candidate"]) == ("r-0001", "r-0002", 1.0, 2 / 3)
 
 
 def test_a_budget_of_one_dev_run_parks_after_the_first_with_exit_8_and_a_note_naming_the_limit(workload_dir):
@@ -160,12 +196,22 @@ def test_a_child_of_the_conductor_that_sets_agentkit_process_to_cli_cannot_write
                 [*agentkit_command(), "decide", "--mark", "human", "--words-file", str(words()), "--question", "a7: resume?", "--option", "resume", "--run", "r-0001"],
                 capture_output=True, text=True, env={**os.environ, decisions.PROCESS_VARIABLE: "cli"}, timeout=600,
             ))
+            # A child started in another directory, citing a pull request in its form so that its source is valid there.
+            elsewhere = Path("a7-elsewhere")
+            elsewhere.mkdir()
+            children.append(subprocess.run(
+                [*agentkit_command(), "decide", "--mark", "human", "--words-file", str(words().resolve()), "--question", "a7: resume?", "--option", "resume",
+                 "--pull-request", "https://github.com/chadlis/agentkit/pull/23@" + "0" * 40],
+                capture_output=True, text=True, cwd=elsewhere, env={**os.environ, decisions.PROCESS_VARIABLE: "cli"}, timeout=600,
+            ))
         return replay(self, case, repeat)
 
     monkeypatch.setattr(ScriptedAdapter, "answer", answer_and_start_a_child)
     assert main(["conduct", "--workload-dir", str(workload_dir), "--set", "dev", "--configurations", "concise,verbose"]) == 0
-    [child] = children
+    [child, elsewhere] = children
     assert child.returncode == 2, child.stdout + child.stderr
+    assert elsewhere.returncode == 2, elsewhere.stdout + elsewhere.stderr
+    assert not (Path("a7-elsewhere") / "decisions" / "log.jsonl").exists()
     assert human_lines() == []
     # The loop is over and its marker gone: an unmarked process writes HUMAN again.
     after = subprocess.run(

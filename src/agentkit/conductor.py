@@ -1,14 +1,16 @@
 """The conductor: the automatic mode on the dev set (`docs/design.md`, sections 1 and 7).
 
-It runs each Configuration, a scripted fixture, through the harness, under the budget and the stops. It exports each run and has Hypotrail import and assess it, then compare it with the Control: the first Configuration, then the one each Comparison keeps. Hypotrail runs as a subprocess. Of what Hypotrail prints, the conductor reads the ids it passes on and the two shares of `comparison.delta`, never a Study file nor the References. Each Comparison gives one `PROXY` line under `keep-higher-dev-score@1`. It never runs `hypotrail decide`, never writes `HUMAN`, never resumes a stop and never edits the budget.
+It runs each Configuration, a scripted fixture, through the harness, under the budget and the stops. It exports each run and has Hypotrail import and assess it, then compare it with the Control: the first Configuration, then the one each Comparison keeps. Hypotrail runs as a subprocess. Of what Hypotrail prints, the conductor reads the ids it passes on and `comparison.delta`, never a Study file nor the References. The Study lives in a temporary directory, deleted when the loop ends, and only the dev deltas are kept under `ledger/conductor/`. Each Comparison gives one `PROXY` line under `keep-higher-dev-score@1`. It never runs `hypotrail decide`, never writes `HUMAN`, never resumes a stop and never edits the budget.
 
 While its loop runs, its marker file says so (`agentkit.markers`). Whatever ends the loop, it writes a note for the person, `ledger/conductor/<conduct_id>-note.md`: the runs spent, the `PROXY` decisions, and the stop or limit that parked it."""
 
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
+import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -75,24 +77,35 @@ def _hypotrail(*args: str) -> dict:
 
 
 class Study:
-    """The conductor's dev Study in Hypotrail, `ledger/conductor/<conduct_id>/study`, made on first use."""
+    """The conductor's dev Study in Hypotrail, made on first use in a temporary directory outside the working directory, with the exports Hypotrail imports.
 
-    def __init__(self, workload_dir: Path, work: Path):
-        self.workload_dir, self.work, self.path = workload_dir, work, work / "study"
+    `hypotrail init` copies the whole References file into the Study, the held-out References included: `close` deletes the directory, and only the dev Comparisons are kept, in `ledger/conductor/<conduct_id>-comparisons.jsonl`."""
+
+    def __init__(self, workload_dir: Path, conduct_id: str):
+        self.workload_dir, self.conduct_id = workload_dir, conduct_id
         self.examples = str(workload_dir.parent)
+        self.work: Path | None = None
         self.references_id: str | None = None
+
+    @property
+    def path(self) -> Path:
+        return self.work / "study"
+
+    def close(self) -> None:
+        if self.work is not None:
+            shutil.rmtree(self.work, ignore_errors=True)
 
     def assess(self, configuration: str, run_id: str) -> str:
         """Exports the run, has Hypotrail import and assess it, and returns the Assessment id."""
         if self.references_id is None:
-            self.work.mkdir(parents=True, exist_ok=True)
+            self.work = Path(tempfile.mkdtemp(prefix=f"agentkit-{self.conduct_id}-"))
             made = _hypotrail("init", "--workload", self.workload_dir.name, "--study", str(self.path), "--examples-dir", self.examples)
             self.references_id = made["references_id"]
         out = self.work / f"export-{configuration}"
         export(run_id, out)
         imported = _hypotrail(
             "import", "agent", "--study", str(self.path), "--source", str(out / "answers.jsonl"), "--population", str(out / "population.json"),
-            "--request-id", f"{self.work.name}-{run_id}", "--examples-dir", self.examples,
+            "--request-id", f"{self.conduct_id}-{run_id}", "--examples-dir", self.examples,
         )
         assessed = _hypotrail(
             "assess", "--study", str(self.path), "--observations", imported["observation_set_id"], "--scorer", "text_facts_v1",
@@ -100,17 +113,24 @@ class Study:
         )
         return assessed["assessment"]["assessment_id"]
 
-    def delta(self, control: str, candidate: str) -> tuple[float, float]:
-        """The dev `text_facts_success` shares of the Control and the Candidate, as `comparison.delta` holds them."""
+    def delta(self, control: str, candidate: str) -> dict:
+        """The `comparison.delta` of the Control and the Candidate, which holds their dev `text_facts_success` shares."""
         delta = _hypotrail("compare", "--study", str(self.path), "--control", control, "--candidate", candidate, "--examples-dir", self.examples)["comparison"]["delta"]
         shares = (delta.get("control"), delta.get("candidate"))
         if not all(isinstance(share, (int, float)) and not isinstance(share, bool) for share in shares):
             raise HypotrailFailed(f"hypotrail compare gave no two shares to compare ({delta.get('reason')})")
-        return shares
+        return delta
 
 
 def _loop(journal: Journal, workload_dir: Path, partition: str) -> tuple[str, str]:
-    study = Study(workload_dir, CONDUCTOR_DIR / journal.conduct_id)
+    study = Study(workload_dir, journal.conduct_id)
+    try:
+        return _configurations(journal, workload_dir, partition, study)
+    finally:
+        study.close()
+
+
+def _configurations(journal: Journal, workload_dir: Path, partition: str, study: Study) -> tuple[str, str]:
     kept: tuple[str, str, str] | None = None
     for configuration in journal.configurations:
         try:
@@ -137,8 +157,12 @@ def _loop(journal: Journal, workload_dir: Path, partition: str) -> tuple[str, st
         if kept is None:
             kept = (configuration, run_id, assessment)
             continue
-        control_name = kept[0]
-        control, candidate = study.delta(kept[2], assessment)
+        control_name, control_run = kept[0], kept[1]
+        delta = study.delta(kept[2], assessment)
+        control, candidate = delta["control"], delta["candidate"]
+        CONDUCTOR_DIR.mkdir(parents=True, exist_ok=True)
+        with (CONDUCTOR_DIR / f"{journal.conduct_id}-comparisons.jsonl").open("a", encoding="utf-8", newline="\n") as kept_file:
+            kept_file.write(json.dumps({"control": control_name, "control_run": control_run, "candidate": configuration, "candidate_run": run_id, "delta": delta}) + "\n")
         option = keep_higher_dev_score(control=control, candidate=candidate)
         if option == "keep_candidate":
             kept = (configuration, run_id, assessment)
@@ -173,6 +197,7 @@ def conduct(workload_dir: Path, partition: str, configurations: list[str]) -> Jo
     journal = Journal(next_id(), configurations)
     # The mark outlives the loop: this process, and every child it starts, never writes HUMAN.
     decisions.enter_process("conductor")
+    markers.anchor()
     markers.write(journal.conduct_id)
     try:
         journal.outcome, journal.detail = _loop(journal, workload_dir, partition)
