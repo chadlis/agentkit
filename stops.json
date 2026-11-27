@@ -1,0 +1,7 @@
+{
+  "reason": "The stop rules of K-0001 (chadlis/agentkit#7), a PROXY decision under D-166. budget-reached@1 fires on the dev run that spends the last of the dev_runs of budget.json. failed-share@1 fires on a dev run whose failed lines are more than the share `above` of its produced and failed lines; missing lines do not count, since scripted repeats are missing by design. Both exit 3, on dev only.",
+  "rules": {
+    "budget-reached@1": {},
+    "failed-share@1": {"above": 0.2}
+  }
+}

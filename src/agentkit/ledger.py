@@ -96,14 +96,16 @@ def refuse_run(ledger_dir: Path, *, partition: str, adapter: str, configuration:
     return run_id
 
 
-def close_run(ledger_dir: Path, run_id: str, status: str = "completed", reason: str | None = None) -> None:
-    """Closes the run; a run the harness stops before its last pair is `failed` with the `reason` it stopped for."""
+def close_run(ledger_dir: Path, run_id: str, status: str = "completed", reason: str | None = None, stop: str | None = None) -> None:
+    """Closes the run; a run the harness stops before its last pair is `failed` with the `reason` it stopped for, and a run that fired a stop rule names its `stop`."""
     records = read_records(ledger_dir)
     record = next(item for item in records if item["run_id"] == run_id)
     record["status"] = status
     record["end_time"] = now()
     if reason is not None:
         record["reason"] = reason
+    if stop is not None:
+        record["stop"] = stop
     write_records(ledger_dir, records)
 
 

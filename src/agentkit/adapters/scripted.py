@@ -28,6 +28,8 @@ class ScriptedAdapter:
                 raise WorkloadError(f"{fixture}: each line needs a case_id and a repeat, once per pair ({key!r})")
             if row.get("observation_status") == "produced" and not isinstance(row.get("raw_answer"), str):
                 raise WorkloadError(f"{fixture}: the produced line {key!r} has no raw_answer")
+            if row.get("observation_status") == "failed" and not (isinstance(row.get("metadata"), dict) and isinstance(row["metadata"].get("reason"), str) and row["metadata"]["reason"]):
+                raise WorkloadError(f"{fixture}: the failed line {key!r} has no metadata.reason")
             self._answers[key] = {name: row[name] for name in ANSWER_KEYS if name in row}
             settings.append(row.get("settings"))
         if any(item != settings[0] for item in settings):

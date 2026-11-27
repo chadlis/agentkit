@@ -30,6 +30,14 @@ def workload_dir() -> Path:
 
 @pytest.fixture(autouse=True)
 def ledger_in_tmp(tmp_path, monkeypatch) -> None:
-    """The kit writes its ledger under the working directory and reads `budget.json` there: every test runs in its own, never in the repository, with a copy of the versioned budget."""
+    """The kit writes its ledger, its decision log and its stops under the working directory and reads `budget.json` and `stops.json` there: every test runs in its own, never in the repository, with a copy of the versioned files."""
     monkeypatch.chdir(tmp_path)
     shutil.copyfile(ROOT / "budget.json", tmp_path / "budget.json")
+    shutil.copyfile(ROOT / "stops.json", tmp_path / "stops.json")
+
+
+@pytest.fixture(autouse=True)
+def unmarked_process(monkeypatch) -> None:
+    """No test starts as the conductor's or the evaluator's process, and a mark a test's code sets is removed after it."""
+    monkeypatch.setenv("AGENTKIT_PROCESS", "")
+    monkeypatch.delenv("AGENTKIT_PROCESS")

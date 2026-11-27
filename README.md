@@ -6,7 +6,7 @@ It runs on a public twin only: the Chinook prose Workload (`chinook_prose`) of c
 
 ## Status
 
-Under construction. `agentkit run` runs the `scripted` adapter on the dev set, counted in the run ledger before its first call; `agentkit export` writes the files `import agent` reads from a closed ledger run; `agentkit status` prints the runs per set and per status. The held-out set (`public_check`) is refused outside the evaluator entry point: exit 9 and a ledger record `refused`, a guard in code and not a wall (`docs/design.md`, section 3). Every run is checked against `budget.json` before it spends: a run that would exceed a limit exits 8 with a ledger record `refused`. The `live` adapter (Anthropic, opt-in) needs `--live`, `--model`, a key in `AGENTKIT_ANTHROPIC_API_KEY` and a price in `budget.json`, and stops at its ceiling; the versioned budget keeps it off (ceiling 0, no price). The decision log, the conductor and the evaluator job are planned in the slice issue and its tickets.
+Under construction. `agentkit run` runs the `scripted` adapter on the dev set, counted in the run ledger before its first call; `agentkit export` writes the files `import agent` reads from a closed ledger run; `agentkit status` prints the runs per set and per status. The held-out set (`public_check`) is refused outside the evaluator entry point: exit 9 and a ledger record `refused`, a guard in code and not a wall (`docs/design.md`, section 3). Every run is checked against `budget.json` before it spends: a run that would exceed a limit exits 8 with a ledger record `refused`. The `live` adapter (Anthropic, opt-in) needs `--live`, `--model`, a key in `AGENTKIT_ANTHROPIC_API_KEY` and a price in `budget.json`, and stops at its ceiling; the versioned budget keeps it off (ceiling 0, no price). `agentkit decide` appends a decision to `decisions/log.jsonl`, `PROXY` with its rule or `HUMAN` with a file of the person's words, and `agentkit cite` prints the citation a Hypotrail Decision holds as its `source`. A stop rule of `stops.json` that fires on a dev run exits 3 and writes `stops/STOP-<run>.json`; every later run exits 5 until a `HUMAN` decision cites it. `agentkit status` also lists the open stops and the decisions with their marks. The conductor and the evaluator job are planned in the slice issue and its tickets.
 
 ## Layout
 
@@ -18,12 +18,15 @@ Under construction. `agentkit run` runs the `scripted` adapter on the dev set, c
   - `ledger.py`: the run ledger, `ledger/runs.jsonl` of the working directory, one record per run, and the answers each run recorded under `ledger/answers/`. A run that crashes stays `running`; the next run marks it `failed`.
   - `rules.py`: the named decision rules, `keep-higher-dev-score@1` first.
   - `export.py`: writes `answers.jsonl` and `population.json` for `import agent`, from a `completed` ledger run, or one the harness stopped at the live ceiling (its unreached pairs are `missing`, with the reason).
-  - (planned) `decisions.py`: the decision log, with its `HUMAN` and `PROXY` marks.
+  - `decisions.py`: the decision log, with its `HUMAN` and `PROXY` marks, and its citation. A process marked `conductor` or `evaluator` (`AGENTKIT_PROCESS`, inherited by its children) cannot write `HUMAN`: a guard against accidental writes, not a wall.
+  - `stops.py`: the rules of `stops.json` and the stop files under `stops/`, open until a `HUMAN` decision cites them.
   - (planned) `conductor.py`: the automatic loop on the dev set, under budget.
   - `evaluator.py`: the entry point of the evaluator job; it checks that it runs in a job of `evaluator.yml`. The job itself is planned.
-- `tests/`: offline tests; no network, no model call (`test_offline.py` reruns the suite with every socket blocked). `tests/e2e/test_dev_end_to_end.py` runs the export through Hypotrail's `init`, `import agent`, `assess`, `compare` and a proxy `decide`, and imports a three-repeat export and one with `failed` and `missing` lines.
+- `tests/`: offline tests; no network, no model call (`test_offline.py` reruns the suite with every socket blocked). `tests/e2e/test_dev_end_to_end.py` runs the export through Hypotrail's `init`, `import agent`, `assess`, `compare` and a proxy `decide` whose `--source` is the `agentkit cite` line of the kit's own `PROXY` decision, and imports a three-repeat export and one with `failed` and `missing` lines.
 - `.github/workflows/`: `ci.yml` (pytest), `e2e.yml` (the whole suite against Hypotrail checked out at `hypotrail.pin`, or at `hypotrail_ref` when dispatched) and, later, `evaluator.yml` (the evaluator job, manual, in a protected environment).
 - `budget.json`: the kit's limits and model prices, raised only by a pull request that says why.
+- `stops.json`: the stop rules and their thresholds.
+- `decisions/log.jsonl`: the kit's decision log (`kit-decision/1`), appended by `agentkit decide`. `ledger/` and `stops/` are not committed.
 - `hypotrail.pin`: the chadlis/hypotrail commit the kit is tested against.
 - `contracts/`: the file formats shared with Hypotrail and mlkit (JSON Schemas and examples), the copied ones pinned in `contracts.lock.json`; their changes in `docs/contracts/CHANGELOG.md`.
 - `docs/design.md`: the bricks, the contract with Hypotrail, the wall, the decision log, the budget, the stops, and the two modes.
@@ -36,7 +39,11 @@ agentkit run --workload-dir hypotrail/examples/chinook_prose --set dev --adapter
 agentkit export --run r-0001 --out OUT
   -> OUT/answers.jsonl, OUT/population.json
 agentkit status
-  -> dev: 1 run (1 completed, 0 failed, 0 refused, 0 running)
+  -> dev: 1 run (1 completed, 0 failed, 0 refused, 0 running), the open stops and the decisions
+agentkit decide --mark proxy --rule NAME@VERSION --question TEXT --option TEXT --run r-0001
+agentkit decide --mark human --words-file FILE --question TEXT --option TEXT --stop STOP-r-0002
+agentkit cite K-0001
+  -> kit:chadlis/agentkit@<commit>:decisions/log.jsonl#K-0001;mark=PROXY;level=none, once the line is committed
 hypotrail import agent --study STUDY --source answers.jsonl --population population.json --request-id ID
 hypotrail assess / compare / report
 ```

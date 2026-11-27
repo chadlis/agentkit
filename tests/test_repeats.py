@@ -104,3 +104,50 @@ def test_exporting_an_existing_run_with_repeats_is_invalid_input(workload_dir, t
     [record] = read_records()
     out = tmp_path / "out"
     assert (main(["export", "--run", record["run_id"], "--repeats", "3", "--out", str(out)]), out.exists()) == (2, False)
+
+
+def test_every_failed_and_missing_line_of_a_live_provider_error_and_of_scripted_repeats_carries_metadata_reason(workload_dir, tmp_path, monkeypatch):
+    from agentkit.adapters import live
+    from test_budget import write_budget
+    from test_live import MODEL, PRICE, FailingOnSecondCall, FakeClient, live_run
+
+    monkeypatch.setattr(live, "AnthropicClient", FailingOnSecondCall, raising=False)
+    monkeypatch.setenv("AGENTKIT_ANTHROPIC_API_KEY", "not-a-real-key")
+    write_budget(live={"calls": 5, "tokens": 100000, "usd": 10}, prices={MODEL: PRICE})
+    FakeClient.calls = []
+    assert live_run(write_workload(tmp_path / "five"), "--live") == 1
+    [record] = read_records()
+    assert main(["export", "--run", record["run_id"], "--out", str(tmp_path / "live")]) == 0
+    assert main(["export", "--workload-dir", str(workload_dir), "--set", "dev", "--adapter", "scripted", "--fixture", "concise", "--repeats", "3", "--out", str(tmp_path / "scripted")]) == 0
+    exported = {name: read_export(tmp_path / name)[0] for name in ("live", "scripted")}
+    unanswered = {name: [line for line in lines if line["observation_status"] != "produced"] for name, lines in exported.items()}
+    assert Counter(line["observation_status"] for line in unanswered["live"]) == {"failed": 1, "missing": 3}
+    assert Counter(line["observation_status"] for line in unanswered["scripted"]) == {"missing": 60}
+    reasons = {name: [isinstance(line.get("metadata", {}).get("reason"), str) for line in lines] for name, lines in unanswered.items()}
+    assert reasons == {name: [True] * len(lines) for name, lines in unanswered.items()}
+
+
+class FailsWithoutReason(FailsOnceThenStops):
+    """Answers every pair, except a `failed` answer with no `metadata.reason` for one pair."""
+
+    def answer(self, case, repeat):
+        if (case.case_id, repeat) == self.fails_on:
+            return Answer(fields={"observation_status": "failed", "metadata": {"error": "the test adapter failed"}})
+        return super().answer(case, repeat)
+
+
+def test_a_failed_answer_without_metadata_reason_is_refused_and_its_run_is_not_exported(tmp_path):
+    fixture = [{"case_id": "C1", "repeat": 0, "observation_status": "failed", "metadata": {"error": "no reason given"}}]
+    workload = write_workload(tmp_path / "five", fixture)
+    assert main(["run", "--workload-dir", str(workload), "--set", "dev", "--adapter", "scripted", "--fixture", "test"]) == 2
+    assert read_records() == []
+    try:
+        run(workload, "dev", FailsWithoutReason(fails_on=("C2", 0), stops_on=("none", 0)))
+    except Exception as error:
+        refusal = type(error).__name__
+    else:
+        refusal = None
+    [record] = read_records()
+    assert (refusal, record["status"], record.get("reason")) == ("WorkloadError", "failed", None)
+    out = tmp_path / "out"
+    assert (main(["export", "--run", record["run_id"], "--out", str(out)]), out.exists()) == (2, False)

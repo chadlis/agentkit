@@ -5,7 +5,7 @@ import os
 import sys
 from pathlib import Path
 
-from agentkit import budget, harness, ledger
+from agentkit import budget, decisions, harness, ledger, stops
 from agentkit.adapters import live
 from agentkit.adapters.scripted import ScriptedAdapter
 from agentkit.cases import WorkloadError
@@ -14,11 +14,13 @@ from agentkit.export import export
 
 EXIT_RUN_FAILED = 1
 EXIT_INVALID_INPUT = 2
+EXIT_STOP = 3
+EXIT_OPEN_STOP = 5
 EXIT_BUDGET = 8
 EXIT_HELD_OUT_REFUSED = 9
 RUN_OPTIONS = ("workload_dir", "partition", "adapter")
 ADAPTER_OPTIONS = ("fixture", "model", "repeats")
-INVALID = (WorkloadError, ledger.LedgerError, budget.BudgetError)
+INVALID = (WorkloadError, ledger.LedgerError, budget.BudgetError, stops.StopsError, decisions.DecisionError)
 
 
 def add_run_options(parser: argparse.ArgumentParser, required: bool) -> None:
@@ -45,8 +47,21 @@ def build_parser() -> argparse.ArgumentParser:
     add_run_options(export, required=False)
     export.add_argument("--out", required=True, type=Path, metavar="OUT", help="the directory to write answers.jsonl and population.json in")
     export.set_defaults(handler=_export)
-    status = commands.add_parser("status", help="print, read-only, the ledger's runs per set and per status")
+    status = commands.add_parser("status", help="print, read-only, the ledger's runs per set and per status, the open stops and the decisions with their marks")
     status.set_defaults(handler=_status)
+    decide = commands.add_parser("decide", help="append one decision to decisions/log.jsonl, marked PROXY with its rule or HUMAN with a person's words file")
+    decide.add_argument("--question", required=True, metavar="TEXT", help="what is decided: which Configuration to keep trying, whether to resume after a stop")
+    decide.add_argument("--option", required=True, metavar="TEXT", help="the option kept")
+    decide.add_argument("--mark", required=True, choices=["proxy", "human"])
+    decide.add_argument("--rule", metavar="NAME@VERSION", help="PROXY only, required: the rule applied")
+    decide.add_argument("--words-file", type=Path, metavar="FILE", help="HUMAN only, required: a file the person wrote, read whole")
+    decide.add_argument("--run", metavar="RUN_ID", help="cite a run of the ledger")
+    decide.add_argument("--stop", metavar="STOP_ID", help="cite a stop of stops/")
+    decide.add_argument("--pull-request", metavar="URL@COMMIT", help="cite a pull request: https://github.com/<owner>/<repo>/pull/<n>@<40-hex commit>, its merge commit or reviewed head")
+    decide.set_defaults(handler=_decide)
+    cite = commands.add_parser("cite", help="print the kit-citation/1 line of a decision that exists at the commit checked out")
+    cite.add_argument("id", metavar="K-NNNN")
+    cite.set_defaults(handler=_cite)
     return parser
 
 
@@ -65,10 +80,22 @@ def _start(args: argparse.Namespace) -> str:
     return harness.run(args.workload_dir, args.partition, adapter, repeats=1 if args.repeats is None else args.repeats)
 
 
+def _record(run_id: str) -> dict:
+    return next(item for item in ledger.read_records() if item["run_id"] == run_id)
+
+
 def _stopped(run_id: str) -> str | None:
     """The reason the harness stopped run `run_id` before its last pair, or None."""
-    record = next(item for item in ledger.read_records() if item["run_id"] == run_id)
+    record = _record(run_id)
     return record.get("reason") if record["status"] == "failed" else None
+
+
+def _fired(run_id: str) -> str | None:
+    """The stop that the completed run `run_id` fired, or None; says so on stderr."""
+    stop = _record(run_id).get("stop")
+    if stop is not None:
+        print(f"Run {run_id} fired a stop rule: {stops.STOPS_DIR / stop}.json. Every run exits {EXIT_OPEN_STOP} until a HUMAN decision cites {stop}", file=sys.stderr)
+    return stop
 
 
 def _run(args: argparse.Namespace) -> int:
@@ -77,6 +104,9 @@ def _run(args: argparse.Namespace) -> int:
     except HeldOutRefused as error:
         print(f"refused: {error}", file=sys.stderr)
         return EXIT_HELD_OUT_REFUSED
+    except stops.StopOpen as error:
+        print(f"refused: {error}", file=sys.stderr)
+        return EXIT_OPEN_STOP
     except budget.BudgetRefused as error:
         print(f"refused by the budget ({error.reason}): {error}", file=sys.stderr)
         return EXIT_BUDGET
@@ -88,7 +118,7 @@ def _run(args: argparse.Namespace) -> int:
         print(f"Run {run_id} stopped ({reason}) and is recorded failed (in {ledger.runs_file(ledger.LEDGER_DIR)})", file=sys.stderr)
         return EXIT_BUDGET if reason in budget.CEILING_REASONS else EXIT_RUN_FAILED
     print(f"Run {run_id} completed (in {ledger.runs_file(ledger.LEDGER_DIR)})")
-    return 0
+    return EXIT_STOP if _fired(run_id) is not None else 0
 
 
 def _export(args: argparse.Namespace) -> int:
@@ -105,6 +135,9 @@ def _export(args: argparse.Namespace) -> int:
     except HeldOutRefused as error:
         print(f"refused: {error}", file=sys.stderr)
         return EXIT_HELD_OUT_REFUSED
+    except stops.StopOpen as error:
+        print(f"refused: {error}", file=sys.stderr)
+        return EXIT_OPEN_STOP
     except budget.BudgetRefused as error:
         print(f"refused by the budget ({error.reason}): {error}", file=sys.stderr)
         return EXIT_BUDGET
@@ -112,13 +145,15 @@ def _export(args: argparse.Namespace) -> int:
         print(f"invalid input: {error}", file=sys.stderr)
         return EXIT_INVALID_INPUT
     print(f"Exported run {run_id}: {counts.total()} lines ({counts['produced']} produced, {counts['failed']} failed, {counts['missing']} missing) to {args.out}")
-    return 0
+    return EXIT_STOP if args.run is None and _fired(run_id) is not None else 0
 
 
 def _status(args: argparse.Namespace) -> int:
     try:
         table = ledger.counts(ledger.read_records())
-    except ledger.LedgerError as error:
+        blocking = stops.open_stops()
+        lines = decisions.lines()
+    except INVALID as error:
         print(f"invalid input: {error}", file=sys.stderr)
         return EXIT_INVALID_INPUT
     if not table:
@@ -127,6 +162,35 @@ def _status(args: argparse.Namespace) -> int:
         total = sum(row.values())
         detail = ", ".join(f"{count} {status}" for status, count in row.items())
         print(f"{partition}: {total} {'run' if total == 1 else 'runs'} ({detail})")
+    print("Open stops: " + (", ".join(f"{stop['id']} ({stop['rule']}, run {stop['run']})" for stop in blocking) or "none"))
+    if not lines:
+        print(f"No decisions in {decisions.LOG}")
+    for line in lines:
+        rule = f", rule {line['rule']}" if line["mark"] == "PROXY" else ""
+        print(f"{line['id']} {line['mark']} (level {decisions.level(line)}{rule}): {line['question']} -> {line['option']}")
+    return 0
+
+
+def _decide(args: argparse.Namespace) -> int:
+    source = {"run": args.run, "stop": args.stop, "pull_request": args.pull_request}
+    try:
+        line = decisions.append(
+            question=args.question, option=args.option, mark=args.mark.upper(), source=source, by=decisions.process(), rule=args.rule, words_file=args.words_file
+        )
+    except INVALID as error:
+        print(f"refused ({getattr(error, 'code', 'INVALID_INPUT')}): {error}", file=sys.stderr)
+        return EXIT_INVALID_INPUT
+    print(f"{line['id']} {line['mark']} by {line['by']}: {line['option']} (in {decisions.LOG})")
+    return 0
+
+
+def _cite(args: argparse.Namespace) -> int:
+    try:
+        citation = decisions.cite(args.id)
+    except decisions.DecisionError as error:
+        print(f"refused ({error.code}): {error}", file=sys.stderr)
+        return EXIT_INVALID_INPUT
+    print(citation)
     return 0
 
 

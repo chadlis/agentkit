@@ -8,6 +8,8 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from contextvars import ContextVar
 
+from agentkit import decisions
+
 HELD_OUT = "public_check"
 WORKFLOW = ".github/workflows/evaluator.yml"
 # `GITHUB_WORKFLOW_REF` is `<owner>/<repo>/<workflow path>@<ref>`.
@@ -31,9 +33,11 @@ def inside() -> bool:
 
 @contextmanager
 def entry_point() -> Iterator[None]:
-    """Within it, `agentkit.cases` and the harness read the held-out Partition; refused unless the process is a job of the evaluator workflow."""
+    """Within it, `agentkit.cases` and the harness read the held-out Partition; refused unless the process is a job of the evaluator workflow. It marks the process as the evaluator's for the decision log."""
     if not in_evaluator_job():
         raise HeldOutRefused(f"the {HELD_OUT} Partition is read only in a GitHub Actions job of {WORKFLOW}")
+    # The mark outlives the block: the evaluator's process, and every child it starts, never writes HUMAN.
+    decisions.enter_process("evaluator")
     token = _inside.set(True)
     try:
         yield

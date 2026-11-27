@@ -1,10 +1,11 @@
-"""The end-to-end test of chadlis/agentkit#2 (D-170 on chadlis/hypotrail#75): the kit exports the twin's dev set with the scripted adapter, and Hypotrail at the pinned commit imports, assesses, compares and records a proxy Decision.
+"""The end-to-end test of chadlis/agentkit#2 (D-170 on chadlis/hypotrail#75): the kit exports the twin's dev set with the scripted adapter, and Hypotrail at the pinned commit imports, assesses, compares and records a proxy Decision whose source is the `agentkit cite` line of the kit's own `PROXY` decision (C4 of D-172).
 
 It runs the real commands, `agentkit` and `python -m hypotrail`, each in its own process. A `sitecustomize` put on their `PYTHONPATH` records every open of the References file by the kit and every socket call by any of them. Offline; no model call.
 """
 
 import json
 import os
+import re
 import subprocess
 import sys
 from collections import Counter
@@ -18,6 +19,8 @@ from agentkit.adapters.scripted import Answer, ScriptedAdapter
 from agentkit.rules import KEEP_HIGHER_DEV_SCORE, keep_higher_dev_score
 
 RULE = KEEP_HIGHER_DEV_SCORE
+ROOT = Path(__file__).resolve().parents[2]
+CITATION = re.compile(r"kit:chadlis/agentkit@(?P<commit>[0-9a-f]{40}):decisions/log\.jsonl#(?P<id>K-[0-9]{4,});mark=PROXY;level=none")
 SITECUSTOMIZE = '''
 import os, sys
 
@@ -59,15 +62,15 @@ def hypotrail_command() -> list[str]:
 
 
 class Commands:
-    def __init__(self, tmp_path: Path, references: Path):
+    def __init__(self, tmp_path: Path, references: Path, cwd: Path | None = None):
         self.audit = tmp_path / "audit"
         self.audit.mkdir()
         (self.audit / "sitecustomize.py").write_text(SITECUSTOMIZE, encoding="utf-8")
         self.references = os.path.realpath(references)
-        self.cwd = tmp_path
+        self.cwd = tmp_path if cwd is None else cwd
 
-    def run(self, command: list[str], log: str, watch_references: bool = False) -> subprocess.CompletedProcess:
-        env = {key: value for key, value in os.environ.items() if key != "HYPOTRAIL_ANTHROPIC_API_KEY"}
+    def run(self, command: list[str], log: str, watch_references: bool = False, env: dict | None = None) -> subprocess.CompletedProcess:
+        env = {key: value for key, value in os.environ.items() if key != "HYPOTRAIL_ANTHROPIC_API_KEY"} | (env or {})
         env["PYTHONPATH"] = os.pathsep.join(filter(None, [str(self.audit), env.get("PYTHONPATH")]))
         env["AGENTKIT_AUDIT_LOG"] = str(self.audit / f"{log}.log")
         if watch_references:
@@ -79,6 +82,18 @@ class Commands:
         return path.read_text(encoding="utf-8").splitlines() if path.is_file() else []
 
 
+def git(work: Path, *args: str) -> str:
+    done = subprocess.run(["git", "-c", "user.name=agentkit-e2e", "-c", "user.email=e2e@example.invalid", *args], cwd=work, capture_output=True, text=True, check=True)
+    return done.stdout
+
+
+def kit_clone(tmp_path: Path) -> Path:
+    """A scratch clone of the kit, whose commits a citation of its decision log can name; it holds the versioned `budget.json` and `stops.json`."""
+    work = tmp_path / "agentkit"
+    subprocess.run(["git", "clone", "--quiet", str(ROOT), str(work)], check=True)
+    return work
+
+
 def json_out(result: subprocess.CompletedProcess) -> dict:
     assert result.returncode == 0, result.stdout + result.stderr
     return json.loads(result.stdout)
@@ -88,7 +103,8 @@ def test_the_dev_export_of_both_fixtures_is_imported_assessed_compared_and_decid
     hypotrail = hypotrail_command()
     examples = str(workload_dir.parent)
     workload = json.loads((workload_dir / "workload.json").read_text(encoding="utf-8"))
-    commands = Commands(tmp_path, workload_dir / workload["references"])
+    work = kit_clone(tmp_path)
+    commands = Commands(tmp_path, workload_dir / workload["references"], cwd=work)
     study = str(tmp_path / "study")
 
     exports = {}
@@ -145,17 +161,48 @@ def test_the_dev_export_of_both_fixtures_is_imported_assessed_compared_and_decid
     delta = comparison["delta"]
     option_id = keep_higher_dev_score(control=delta["control"], candidate=delta["candidate"])
     option = next(item for item in pending["options"] if item["id"] == option_id)
+    question = pending["question"]["text"]
+    kit_decided = commands.run(
+        [*agentkit_command(), "decide", "--mark", "proxy", "--rule", RULE, "--question", question, "--option", option["text"], "--run", "r-0002"],
+        "agentkit-decide",
+    )
+    assert kit_decided.returncode == 0, kit_decided.stdout + kit_decided.stderr
+    log = work / "decisions" / "log.jsonl"
+    kit_line = json.loads(log.read_text(encoding="utf-8").splitlines()[-1])
+    assert (kit_line["mark"], kit_line["rule"], kit_line["by"], kit_line["source"]) == ("PROXY", RULE, "cli", {"run": "r-0002"})
+    git(work, "add", "decisions/log.jsonl")
+    git(work, "commit", "--quiet", "-m", f"{kit_line['id']}: the end-to-end test's PROXY decision")
+
+    words = tmp_path / "words.txt"
+    words.write_text("Example words written for this end-to-end test, not a person's: keep it.\n", encoding="utf-8")
+    before = log.read_bytes()
+    conductor = commands.run(
+        [*agentkit_command(), "decide", "--mark", "human", "--words-file", str(words), "--question", question, "--option", option["text"], "--run", "r-0002"],
+        "agentkit-decide-conductor", env={"AGENTKIT_PROCESS": "conductor"},
+    )
+    assert conductor.returncode == 2, conductor.stdout + conductor.stderr
+    assert log.read_bytes() == before
+
+    cited = commands.run([*agentkit_command(), "cite", kit_line["id"]], "agentkit-cite")
+    assert cited.returncode == 0, cited.stderr
+    citation = cited.stdout.removesuffix("\n")
+    parts = CITATION.fullmatch(citation)
+    assert parts and parts["id"] == kit_line["id"], citation
+    at_commit = [json.loads(text) for text in git(work, "show", f"{parts['commit']}:decisions/log.jsonl").splitlines() if text.strip()]
+    assert [line for line in at_commit if line["id"] == kit_line["id"]] == [kit_line]
+
     decided = json_out(commands.run(
         [*hypotrail, "decide", "--study", study, "--author", "proxy",
-         "--question", pending["question"]["text"], "--option", option["text"],
+         "--question", question, "--option", option["text"],
          "--question-id", pending["question"]["id"], "--option-id", option_id,
          "--artifact", comparison_id, "--read-sequence", str(status["write_sequence"]),
-         "--source", f"rule {RULE}: keep the Configuration with the higher dev text_facts_success",
+         "--source", citation,
          "--request-id", "decide-keep", "--json"],
         "hypotrail-decide",
     ))["decision"]
     assert pending["question"]["id"] == "keep_after_comparison"
-    assert decided["author"] == "proxy" and decided["cited_ids"] == [comparison_id] and RULE in decided["source"]
+    assert decided["author"] == "proxy" and decided["cited_ids"] == [comparison_id]
+    assert decided["source"].encode("utf-8") == cited.stdout.encode("utf-8").removesuffix(b"\n")
 
     after = json_out(commands.run([*hypotrail, "status", "--study", study, "--json"], "hypotrail-status-after"))
     assert [(d["decision_id"], d["applies"]) for d in after["decisions"]] == [(decided["decision_id"], True)]
