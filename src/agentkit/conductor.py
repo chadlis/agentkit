@@ -2,12 +2,13 @@
 
 It runs each Configuration, a scripted fixture, through the harness, under the budget and the stops. It exports each run and has Hypotrail import and assess it, then compare it with the Control: the first Configuration, then the one each Comparison keeps. Hypotrail runs as a subprocess. Of what Hypotrail prints, the conductor reads the ids it passes on and `comparison.delta`, never a Study file nor the References. The Study lives in a temporary directory, deleted when the loop ends, and only the dev deltas are kept under `ledger/conductor/`. Each Comparison gives one `PROXY` line under `keep-higher-dev-score@1`. It never runs `hypotrail decide`, never writes `HUMAN`, never resumes a stop and never edits the budget.
 
-While its loop runs, its marker file says so (`agentkit.markers`). Whatever ends the loop, it writes a note for the person, `ledger/conductor/<conduct_id>-note.md`: the runs spent, the `PROXY` decisions, and the stop or limit that parked it."""
+While its loop runs, its marker file says so (`agentkit.markers`). When the loop ends, on an error, SIGINT or SIGTERM too, it writes a note for the person, `ledger/conductor/<conduct_id>-note.md`: the runs spent, the `PROXY` decisions, and the stop or limit that parked it."""
 
 import json
 import os
 import re
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
@@ -192,12 +193,18 @@ def note(journal: Journal) -> str:
     ])
 
 
+def _terminated(number: int, frame) -> None:
+    raise SystemExit(128 + number)
+
+
 def conduct(workload_dir: Path, partition: str, configurations: list[str]) -> Journal:
-    """Runs the loop under a marker file and returns its journal; the note is written and the marker removed whatever ends it."""
+    """Runs the loop under a marker file and returns its journal; the note is written and the marker removed when it ends, on an error, SIGINT or SIGTERM too."""
     journal = Journal(next_id(), configurations)
     # The mark outlives the loop: this process, and every child it starts, never writes HUMAN.
     decisions.enter_process("conductor")
     markers.anchor()
+    # SIGTERM raises, as SIGINT does, so that the `finally` below deletes the temporary Study and the marker. SIGKILL leaves both.
+    previous = signal.signal(signal.SIGTERM, _terminated)
     markers.write(journal.conduct_id)
     try:
         journal.outcome, journal.detail = _loop(journal, workload_dir, partition)
@@ -210,4 +217,5 @@ def conduct(workload_dir: Path, partition: str, configurations: list[str]) -> Jo
         markers.remove(journal.conduct_id)
         CONDUCTOR_DIR.mkdir(parents=True, exist_ok=True)
         (CONDUCTOR_DIR / f"{journal.conduct_id}-note.md").write_text(note(journal), encoding="utf-8")
+        signal.signal(signal.SIGTERM, previous)
     return journal

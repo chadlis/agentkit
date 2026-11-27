@@ -233,3 +233,25 @@ def test_the_marker_is_removed_when_the_loop_ends_on_an_error(workload_dir, monk
     assert seen and seen[0] == [CONDUCTOR_DIR / "c-0001.json"]
     assert markers() == []
     assert "hypotrail" in note()
+
+
+def test_a_conductor_sent_sigterm_mid_loop_removes_its_temporary_study_and_its_marker(workload_dir, tmp_path):
+    import signal
+    import time
+
+    hypotrail_command()
+    temporary = tmp_path.parent / f"{tmp_path.name}-a7-tmp"
+    temporary.mkdir()
+    environment = {key: value for key, value in os.environ.items() if key != "HYPOTRAIL_ANTHROPIC_API_KEY"} | {"TMPDIR": str(temporary)}
+    command = [*agentkit_command(), "conduct", "--workload-dir", str(workload_dir), "--set", "dev", "--configurations", "concise,verbose"]
+    process = subprocess.Popen(command, env=environment, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    deadline = time.monotonic() + 120
+    # Mid-loop: once `hypotrail init` has copied the References into the temporary Study.
+    while not list(temporary.glob("agentkit-c-*/study/artifacts/*")) and process.poll() is None and time.monotonic() < deadline:
+        time.sleep(0.02)
+    assert process.poll() is None, "the loop ended before the temporary Study was made"
+    assert markers() != []
+    process.send_signal(signal.SIGTERM)
+    process.communicate(timeout=120)
+    assert (list(temporary.iterdir()), markers()) == ([], [])
+    assert process.returncode == 128 + signal.SIGTERM
