@@ -2,13 +2,13 @@
 
 Owner: chadlis/agentkit. Copy: chadlis/mlkit, `contracts/kit-status-1/`, byte for byte, pinned in its `contracts.lock.json`. The decision is D-172 on chadlis/hypotrail#75 (C6).
 
-The JSON `<kit> status --json` prints. The guide agent reads it before proposing a run and shows its numbers where they are written.
+The `kit-status/1` object goes in `details` of a successful `<kit> status --json` response. The C6 response envelope has the fields `ok`, `code`, `exit`, `message` and `details`. The guide agent reads the status before proposing a run and shows its numbers where they are written.
 
 ## Files
 
 | Schema | Describes |
 |---|---|
-| `status.schema.json` | the object `status --json` prints |
+| `status.schema.json` | the `details` of a successful `status --json` response |
 
 JSON Schema 2020-12.
 

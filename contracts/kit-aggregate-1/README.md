@@ -10,7 +10,7 @@ Owner: chadlis/agentkit. Copy: chadlis/mlkit, `contracts/kit-aggregate-1/`, byte
 |---|---|
 | `aggregate.schema.json` | `aggregate.json` |
 
-JSON Schema 2020-12. The schema has no free-text field for a unit: no question, answer, Reference, entity id or per-unit value validates. Names in `aggregates` are fixed identifiers.
+JSON Schema 2020-12. The schema reserves fields for counts and aggregates and specifies an identifier pattern for their names. It accepts `kit.candidate` as a string. The evaluator takes a scripted fixture name for this field and keeps the per-unit files inside the job. The publication test checks the report and its summary for held-out content.
 
 ## Rules a schema cannot say
 
@@ -25,4 +25,4 @@ JSON Schema 2020-12. The schema has no free-text field for a unit: no question, 
 
 ## Tests
 
-`tests/test_contracts.py`. The producer side is agentkit #9's.
+`tests/test_contracts.py` checks the schema examples. `tests/e2e/test_evaluate.py` checks the evaluator's publication boundary.

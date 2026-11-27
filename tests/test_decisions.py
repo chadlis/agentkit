@@ -10,6 +10,7 @@ from pathlib import Path
 
 import jsonschema
 import pytest
+from contract_formats import FORMATS
 
 from agentkit import decisions
 from agentkit.cli import main
@@ -17,7 +18,7 @@ from agentkit.cli import main
 ROOT = Path(__file__).resolve().parents[1]
 CONTRACT = ROOT / "contracts" / "kit-decision-1"
 LINE = jsonschema.Draft202012Validator(
-    json.loads((CONTRACT / "line.schema.json").read_text(encoding="utf-8")), format_checker=jsonschema.Draft202012Validator.FORMAT_CHECKER
+    json.loads((CONTRACT / "line.schema.json").read_text(encoding="utf-8")), format_checker=FORMATS
 )
 CITATION = jsonschema.Draft202012Validator(json.loads((CONTRACT / "citation.schema.json").read_text(encoding="utf-8")))
 PR = "https://github.com/chadlis/agentkit/pull/41@0123456789abcdef0123456789abcdef01234567"
