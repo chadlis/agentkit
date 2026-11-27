@@ -1,8 +1,8 @@
 """The evaluator job's held-out reading (`docs/design.md`, sections 1 and 3): the one caller of `agentkit.evaluator.entry_point()`.
 
-It reads one frozen Configuration, a scripted fixture, on the held-out Partition. The harness's pairs and answers, the export and Hypotrail's Study live in a temporary directory outside the working directory, which the reading deletes when it ends, on an error or SIGTERM too; SIGKILL leaves it. Hypotrail runs as a subprocess: `init`, `import agent`, `assess --scorer text_facts_v1` and `report`. Only the aggregate report leaves the reading: `aggregate.json` (`kit-aggregate/1`) and `aggregate.md`, a short page made from it alone.
+It reads one frozen Configuration, a scripted fixture, on the held-out Partition. The harness's pairs and answers, the export and Hypotrail's Study live in a temporary directory outside the working directory, which the reading deletes when it ends, on an error or SIGTERM too; SIGKILL leaves it. Hypotrail runs as a subprocess: `init`, `import agent`, `assess --scorer text_facts_v1` and `report`. Only the aggregate report and the reading's line for the readings record leave the reading: `aggregate.json` (`kit-aggregate/1`), `aggregate.md`, a short page made from it alone, and `reading.jsonl`, which holds no held-out text.
 
-The kit's ledger counts the reading in a record that lists no pair, before the first adapter call, so that a second reading of the same Configuration in the same working directory is refused by the budget. Once counted, the reading is closed `failed` by any error, SIGINT or SIGTERM. The reading writes no decision.
+The kit's ledger counts the reading in a record that lists no pair, before the first adapter call, so that a second reading of the same Configuration in the same working directory is refused by the budget. Across job runs, whose runners start with an empty ledger, the budget also counts the readings of `readings.jsonl`, and once it holds a reading, a candidate whose fixture was committed after the first reading's job commit is refused. Once counted, the reading is closed `failed` by any error, SIGINT or SIGTERM. The reading writes no decision.
 
 What it prints never names a held-out Case: an error of Hypotrail is reported by its command and exit code only, a fixture error without its pair, and any other error after the count by its type only."""
 
@@ -17,7 +17,7 @@ from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
 
-from agentkit import evaluator, harness, ledger
+from agentkit import budget, evaluator, harness, ledger, readings
 from agentkit.adapters.scripted import NAME as SCRIPTED, FixtureError, ScriptedAdapter
 from agentkit.cases import WorkloadError
 from agentkit.conductor import CONFIGURATION, HypotrailFailed, call_hypotrail
@@ -112,22 +112,28 @@ def _terminated(number: int, frame) -> None:
 def read(workload_dir: Path, candidate: str, out: Path) -> dict:
     """Reads `candidate` on the held-out Partition under the evaluator entry point, writes the published files in `out`, and returns `aggregate.json`.
 
-    Outside a job of the evaluator workflow, the reading is recorded `refused` with no pair and raises `HeldOutRefused`, before the fixture is read. A reading the report could not name (an `out` that holds files, a job variable or a checkout commit missing, a candidate that is no fixture) is invalid input and records nothing. An open stop or a spent budget of held-out readings records it `refused` and raises, with no adapter call. Once counted, any error, SIGINT or SIGTERM closes it `failed`, spent, and publishes nothing: a failing Hypotrail command raises `HypotrailFailed`, any other error `ReadingFailed`."""
+    Outside a job of the evaluator workflow, the reading is recorded `refused` with no pair and raises `HeldOutRefused`, before the fixture is read. A reading the report could not name (an `out` that holds files, a job variable or a checkout commit missing, a candidate that is no fixture) is invalid input and records nothing. So is a readings record that is missing or malformed, or one that holds a reading when the checkouts cannot date the candidate's fixture or the record's job commits. An open stop, a spent budget of held-out readings (the ledger's and the record's), or a candidate made after the record's first reading records it `refused` and raises, with no adapter call. Once counted, any error, SIGINT or SIGTERM closes it `failed`, spent, and publishes its line `failed` only: a failing Hypotrail command raises `HypotrailFailed`, any other error `ReadingFailed`."""
     if not evaluator.in_evaluator_job():
         harness.refuse_held_out(evaluator.HELD_OUT, SCRIPTED, None)
     with evaluator.entry_point():
         if CONFIGURATION.fullmatch(candidate) is None:
             raise WorkloadError(f"--candidate is a fixture name, not {candidate!r}")
         if out.exists() and (not out.is_dir() or any(out.iterdir())):
-            raise WorkloadError(f"{out} holds files: the published directory is empty or new, so that only the aggregate report leaves the job")
+            raise WorkloadError(f"{out} holds files: the published directory is empty or new, so that only the aggregate report and the reading's line leave the job")
         where = job()
         hypotrail_commit = checkout_commit(workload_dir)
         try:
             adapter = ScriptedAdapter(workload_dir / "fixtures" / f"answers-{candidate}.jsonl")
         except FixtureError as error:
             raise WorkloadError(error.keyless) from None
-        limits, _, records = harness.admit(evaluator.HELD_OUT, adapter)
-        number = 1 + sum(record["set"] == evaluator.HELD_OUT and record["status"] != "refused" and record["configuration"] == adapter.settings for record in records)
+        record = readings.load()
+        configuration_digest = readings.digest(adapter.settings)
+        recorded = len(readings.of(record, candidate, configuration_digest))
+        limits, _, records = harness.admit(evaluator.HELD_OUT, adapter, recorded=recorded)
+        if readings.made_after(record, workload_dir, candidate):
+            ledger.refuse_run(ledger.LEDGER_DIR, partition=evaluator.HELD_OUT, adapter=SCRIPTED, configuration=adapter.settings, reason=readings.MADE_AFTER)
+            raise budget.BudgetRefused(readings.MADE_AFTER, f"{candidate} was made after the first held-out reading of {readings.RECORD_FILE}")
+        number = 1 + recorded + sum(record["set"] == evaluator.HELD_OUT and record["status"] != "refused" and record["configuration"] == adapter.settings for record in records)
         # SIGTERM raises, as SIGINT does, so that the reading is closed and the `finally` below deletes the temporary directory.
         previous = signal.signal(signal.SIGTERM, _terminated)
         reading_id = ledger.open_run(ledger.LEDGER_DIR, partition=evaluator.HELD_OUT, adapter=SCRIPTED, configuration=adapter.settings, pairs=[])
@@ -148,11 +154,14 @@ def read(workload_dir: Path, candidate: str, out: Path) -> dict:
             out.mkdir(parents=True, exist_ok=True)
             (out / "aggregate.json").write_text(json.dumps(aggregate, indent=2) + "\n", encoding="utf-8")
             (out / "aggregate.md").write_text(page(aggregate), encoding="utf-8")
+            _publish_line(out, readings.line(candidate, configuration_digest, where.commit, "completed"))
         except BaseException as error:
             failure = HYPOTRAIL if isinstance(error, HypotrailFailed) else INTERRUPTED if isinstance(error, (KeyboardInterrupt, SystemExit)) else ERROR
             ledger.close_run(ledger.LEDGER_DIR, reading_id, "failed", failure)
             for name in PUBLISHED:
                 (out / name).unlink(missing_ok=True)
+            # A failed reading is spent: its line leaves the job too, so that the record counts it.
+            _publish_line(out, readings.line(candidate, configuration_digest, where.commit, "failed"))
             if failure == ERROR:
                 # Its message, or a traceback, could name a held-out Case.
                 raise ReadingFailed(f"the reading failed on a {type(error).__name__}") from None
@@ -163,6 +172,11 @@ def read(workload_dir: Path, candidate: str, out: Path) -> dict:
             signal.signal(signal.SIGTERM, previous)
         ledger.close_run(ledger.LEDGER_DIR, reading_id)
         return aggregate
+
+
+def _publish_line(out: Path, line: dict) -> None:
+    out.mkdir(parents=True, exist_ok=True)
+    (out / readings.LINE_FILE).write_text(json.dumps(line) + "\n", encoding="utf-8")
 
 
 def _inside(workload_dir: Path, adapter: ScriptedAdapter, work: Path, reading_id: str) -> tuple[Counter, dict]:

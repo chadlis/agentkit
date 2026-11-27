@@ -22,8 +22,8 @@ def _without_reason(fields: dict | None) -> bool:
     return not isinstance(metadata, dict) or not isinstance(metadata.get("reason"), str) or not metadata["reason"]
 
 
-def admit(partition: str, adapter, ledger_dir: Path = ledger.LEDGER_DIR, budget_file: Path = budget.BUDGET_FILE) -> tuple[budget.Budget, dict, list[dict]]:
-    """Checks, in this order, that no stop is open and that the run of `adapter` on `partition` exceeds no limit of the budget; returns the budget, the stop rules and the ledger's records.
+def admit(partition: str, adapter, ledger_dir: Path = ledger.LEDGER_DIR, budget_file: Path = budget.BUDGET_FILE, recorded: int = 0) -> tuple[budget.Budget, dict, list[dict]]:
+    """Checks, in this order, that no stop is open and that the run of `adapter` on `partition` exceeds no limit of the budget, counting `recorded` held-out readings of earlier jobs with the ledger's; returns the budget, the stop rules and the ledger's records.
 
     A refused run is recorded `refused` in `ledger_dir`, with `stop_open` or the limit as its reason, and raises `StopOpen` or `BudgetRefused`."""
     limits = budget.load(budget_file)
@@ -34,7 +34,7 @@ def admit(partition: str, adapter, ledger_dir: Path = ledger.LEDGER_DIR, budget_
         raise stops.StopOpen([stop["id"] for stop in blocking])
     records = ledger.read_records(ledger_dir)
     try:
-        budget.check_run(limits, records, partition, adapter.settings, getattr(adapter, "is_live", False))
+        budget.check_run(limits, records, partition, adapter.settings, getattr(adapter, "is_live", False), recorded)
     except budget.BudgetRefused as refusal:
         ledger.refuse_run(ledger_dir, partition=partition, adapter=adapter.name, configuration=adapter.settings, reason=refusal.reason)
         raise

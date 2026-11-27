@@ -98,14 +98,14 @@ def load(path: Path = BUDGET_FILE) -> Budget:
     return Budget(data["dev_runs"], data["held_out_readings"], Ceiling(live["calls"], live["tokens"], live["usd"]), prices)
 
 
-def check_run(budget: Budget, records: list[dict], partition: str, configuration: dict | None, is_live: bool) -> None:
-    """Raises `BudgetRefused` when the run would exceed a limit; a `refused` record spends nothing."""
+def check_run(budget: Budget, records: list[dict], partition: str, configuration: dict | None, is_live: bool, recorded: int = 0) -> None:
+    """Raises `BudgetRefused` when the run would exceed a limit; a `refused` record spends nothing. A held-out reading counts the `recorded` readings of its Configuration in earlier jobs as well as the ledger's."""
     spent = [record for record in records if record["set"] == partition and record["status"] != "refused"]
     if partition == DEV and len(spent) >= budget.dev_runs:
         raise BudgetRefused("dev_runs", f"the {budget.dev_runs} dev runs of the cycle are spent")
     if partition == evaluator.HELD_OUT:
         readings = [record for record in spent if record["configuration"] == configuration]
-        if len(readings) >= budget.held_out_readings:
+        if recorded + len(readings) >= budget.held_out_readings:
             raise BudgetRefused("held_out_readings", f"this Configuration has had its {budget.held_out_readings} held-out readings")
     if is_live and 0 in (budget.live.calls, budget.live.tokens, budget.live.usd):
         raise BudgetRefused("live", "the live ceiling of the budget is 0")

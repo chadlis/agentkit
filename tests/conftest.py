@@ -30,10 +30,11 @@ def workload_dir() -> Path:
 
 @pytest.fixture(autouse=True)
 def ledger_in_tmp(tmp_path, monkeypatch) -> None:
-    """The kit writes its ledger, its decision log and its stops under the working directory and reads `budget.json` and `stops.json` there: every test runs in its own, never in the repository, with a copy of the versioned files."""
+    """The kit writes its ledger, its decision log and its stops under the working directory and reads `budget.json`, `stops.json` and `readings.jsonl` there: every test runs in its own, never in the repository, with a copy of the versioned files."""
     monkeypatch.chdir(tmp_path)
     shutil.copyfile(ROOT / "budget.json", tmp_path / "budget.json")
     shutil.copyfile(ROOT / "stops.json", tmp_path / "stops.json")
+    shutil.copyfile(ROOT / "readings.jsonl", tmp_path / "readings.jsonl")
 
 
 @pytest.fixture(autouse=True)

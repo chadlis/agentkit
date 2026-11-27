@@ -1,7 +1,8 @@
 name: evaluator
 
 # The held-out reading (docs/design.md, sections 1 and 3): started by a person, by hand, in the protected environment `held-out`.
-# Only the aggregate report leaves the job; the per-Case files stay on its runner.
+# Only the aggregate report and the reading's line for `readings.jsonl` leave the job; the per-Case files stay on its runner.
+# The job cannot write the record: a person commits the line through a pull request (docs/design.md, section 5).
 on:
   workflow_dispatch:
     inputs:
@@ -17,8 +18,10 @@ jobs:
     runs-on: ubuntu-latest
     environment: held-out
     steps:
+      # Whole histories: the job dates the first reading's commit in the kit, and the candidate's fixture in Hypotrail.
       - uses: actions/checkout@v4
         with:
+          fetch-depth: 0
           persist-credentials: false
       - id: pin
         run: echo "ref=$(tr -d '[:space:]' < hypotrail.pin)" >> "$GITHUB_OUTPUT"
@@ -27,6 +30,7 @@ jobs:
           repository: chadlis/hypotrail
           ref: ${{ steps.pin.outputs.ref }}
           path: hypotrail
+          fetch-depth: 0
           persist-credentials: false
       - uses: astral-sh/setup-uv@v6
         with:
@@ -41,5 +45,23 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: aggregate
-          path: published/
+          path: |
+            published/aggregate.json
+            published/aggregate.md
           if-no-files-found: error
+      # A failed reading is spent too, and publishes its line with no aggregate.
+      - if: ${{ always() && hashFiles('published/reading.jsonl') != '' }}
+        run: |
+          {
+            echo
+            echo "Append this line to readings.jsonl through a pull request before the next reading:"
+            echo
+            echo '```'
+            cat published/reading.jsonl
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+      - if: ${{ always() && hashFiles('published/reading.jsonl') != '' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: reading
+          path: published/reading.jsonl

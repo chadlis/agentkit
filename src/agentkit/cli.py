@@ -5,7 +5,7 @@ import os
 import sys
 from pathlib import Path
 
-from agentkit import budget, conductor, decisions, evaluator_job, harness, ledger, markers, stops
+from agentkit import budget, conductor, decisions, evaluator_job, harness, ledger, markers, readings, stops
 from agentkit.adapters import live
 from agentkit.adapters.scripted import ScriptedAdapter
 from agentkit.cases import WorkloadError
@@ -20,7 +20,7 @@ EXIT_BUDGET = 8
 EXIT_HELD_OUT_REFUSED = 9
 RUN_OPTIONS = ("workload_dir", "partition", "adapter")
 ADAPTER_OPTIONS = ("fixture", "model", "repeats")
-INVALID = (WorkloadError, ledger.LedgerError, budget.BudgetError, stops.StopsError, decisions.DecisionError, markers.MarkerError)
+INVALID = (WorkloadError, ledger.LedgerError, budget.BudgetError, stops.StopsError, decisions.DecisionError, markers.MarkerError, readings.RecordError)
 
 
 def add_run_options(parser: argparse.ArgumentParser, required: bool) -> None:
@@ -250,10 +250,13 @@ def _evaluate(args: argparse.Namespace) -> int:
         print(f"invalid input: {error}", file=sys.stderr)
         return EXIT_INVALID_INPUT
     except (conductor.HypotrailFailed, evaluator_job.ReadingFailed) as error:
-        print(f"the reading failed and is spent; nothing is published: {error}", file=sys.stderr)
+        print(f"the reading failed and is spent; only its line, {args.out / readings.LINE_FILE}, is published, for a person to append to {readings.RECORD_FILE} through a pull request: {error}", file=sys.stderr)
         return EXIT_RUN_FAILED
     reading = aggregate["reading"]
-    print(f"Held-out reading {reading['number']} of {reading['allowed']} of {args.candidate}: {aggregate['counts']['units']} pairs; published {', '.join(evaluator_job.PUBLISHED)} to {args.out}")
+    print(
+        f"Held-out reading {reading['number']} of {reading['allowed']} of {args.candidate}: {aggregate['counts']['units']} pairs; published {', '.join(evaluator_job.PUBLISHED)} to {args.out}, "
+        f"and its line, {readings.LINE_FILE}, for a person to append to {readings.RECORD_FILE} through a pull request"
+    )
     return 0
 
 
