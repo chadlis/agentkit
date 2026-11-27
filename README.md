@@ -18,7 +18,7 @@ Under construction. `agentkit run` runs the `scripted` adapter on the dev set, c
   - `ledger.py`: the run ledger, `ledger/runs.jsonl` of the working directory, one record per run, and the answers each run recorded under `ledger/answers/`. A run that crashes stays `running`; the next run marks it `failed`.
   - `rules.py`: the named decision rules, `keep-higher-dev-score@1` first.
   - `export.py`: writes `answers.jsonl` and `population.json` for `import agent`, from a `completed` ledger run, or one the harness stopped at the live ceiling (its unreached pairs are `missing`, with the reason).
-  - `decisions.py`: the decision log, with its `HUMAN` and `PROXY` marks, and its citation. A process marked `conductor` or `evaluator` (`AGENTKIT_PROCESS`, inherited by its children) cannot write `HUMAN`.
+  - `decisions.py`: the decision log, with its `HUMAN` and `PROXY` marks, and its citation. A process marked `conductor` or `evaluator` (`AGENTKIT_PROCESS`, inherited by its children) cannot write `HUMAN`: a guard against accidental writes, not a wall.
   - `stops.py`: the rules of `stops.json` and the stop files under `stops/`, open until a `HUMAN` decision cites them.
   - (planned) `conductor.py`: the automatic loop on the dev set, under budget.
   - `evaluator.py`: the entry point of the evaluator job; it checks that it runs in a job of `evaluator.yml`. The job itself is planned.

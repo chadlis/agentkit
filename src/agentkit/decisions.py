@@ -1,6 +1,8 @@
 """The decision log, `decisions/log.jsonl` of the working directory, in the form `kit-decision/1`, and its citation `kit-citation/1` (`contracts/kit-decision-1/`).
 
-The writing process is named by `AGENTKIT_PROCESS`: unset or `cli` for the `agentkit` command, `conductor` or `evaluator` once `enter_process` has marked a process. The mark is inherited by every child process, and a marked process cannot unmark itself. A line's level is derived from its mark and source when it is read, never stored."""
+The writing process is named by `AGENTKIT_PROCESS`: unset or `cli` for the `agentkit` command, `conductor` or `evaluator` once `enter_process` has marked a process. Child processes inherit the mark, and `enter_process` refuses to change it. It is a guard against an accidental `HUMAN` write, not a wall: a child can reset the variable, and an unmarked shell counts as `cli`.
+
+A line's level is derived from its mark and source when it is read, never stored. `pr` means the pull request is cited in its form, checked offline; nothing verifies it with the forge."""
 
 import json
 import os
@@ -39,7 +41,7 @@ def process() -> str:
 
 
 def enter_process(role: str) -> None:
-    """Marks this process and its children as `role`. A process marked `conductor` or `evaluator` stays so."""
+    """Marks this process and its children as `role`. Once marked `conductor` or `evaluator`, `enter_process` refuses another role; the variable itself can still be reset."""
     current = process()
     if current != "cli" and current != role:
         raise DecisionError("PROCESS_MARKED", f"this process is the {current}'s and cannot become the {role}'s")
@@ -57,7 +59,7 @@ def lines(log: Path = LOG) -> list[dict]:
 
 
 def level(line: dict) -> str:
-    """`pr` for a `HUMAN` line whose `source.pull_request` has the form `https://github.com/<owner>/<repo>/pull/<n>@<40-hex commit>`, `relayed` for any other `HUMAN` line, `none` for a `PROXY` line."""
+    """`pr` for a `HUMAN` line whose `source.pull_request` has the form `https://github.com/<owner>/<repo>/pull/<n>@<40-hex commit>`, `relayed` for any other `HUMAN` line, `none` for a `PROXY` line. The form is checked offline: nothing asks the forge whether the pull request exists or holds that commit."""
     if line["mark"] != "HUMAN":
         return "none"
     cited = line["source"].get("pull_request")
@@ -73,7 +75,7 @@ def _source(source: dict) -> dict:
     if "stop" in source and not (STOPS / f"{source['stop']}.json").is_file():
         raise DecisionError("STOP_UNKNOWN", f"no stop file {STOPS / source['stop']}.json")
     if "pull_request" in source and PULL_REQUEST.fullmatch(source["pull_request"]) is None:
-        raise DecisionError("PULL_REQUEST_FORM", "a pull request is cited as https://github.com/<owner>/<repo>/pull/<n>@<40-hex merge commit>")
+        raise DecisionError("PULL_REQUEST_FORM", "a pull request is cited as https://github.com/<owner>/<repo>/pull/<n>@<40-hex commit>, its merge commit or the head it was reviewed at")
     return source
 
 

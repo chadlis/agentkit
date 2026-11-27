@@ -57,7 +57,7 @@ def build_parser() -> argparse.ArgumentParser:
     decide.add_argument("--words-file", type=Path, metavar="FILE", help="HUMAN only, required: a file the person wrote, read whole")
     decide.add_argument("--run", metavar="RUN_ID", help="cite a run of the ledger")
     decide.add_argument("--stop", metavar="STOP_ID", help="cite a stop of stops/")
-    decide.add_argument("--pull-request", metavar="URL@COMMIT", help="cite a pull request: https://github.com/<owner>/<repo>/pull/<n>@<40-hex merge commit>")
+    decide.add_argument("--pull-request", metavar="URL@COMMIT", help="cite a pull request: https://github.com/<owner>/<repo>/pull/<n>@<40-hex commit>, its merge commit or reviewed head")
     decide.set_defaults(handler=_decide)
     cite = commands.add_parser("cite", help="print the kit-citation/1 line of a decision that exists at the commit checked out")
     cite.add_argument("id", metavar="K-NNNN")
