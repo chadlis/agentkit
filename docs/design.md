@@ -63,7 +63,7 @@ What the Study records of the kit is what the file declares (`declared`) or cann
 ### 2.4 Repeats, and the `failed` and `missing` lines
 
 - `--repeats N` (default 1) runs every Case N times, `repeat` 0 to N-1; the pairs are listed Case by Case. Below 1 is invalid input (exit 2), refused before anything is recorded. `agentkit export --run` takes no `--repeats`: the run's pairs are the ones it recorded.
-- A pair the adapter answers `failed` keeps its line, with the reason in `metadata.reason`. A pair the run did not reach (a ceiling, a stop) is a `missing` line whose `metadata.reason` is the reason the run stopped. A pair the scripted fixture holds no answer for (any `repeat` but 0 of the twin's fixtures) is a `missing` line, as Hypotrail counts an Episode its log does not hold. The scripted adapter never replays repeat 0's answer for another repeat: that would fake repeats and show a false zero variance. Repeated material will come from a separate authored fixture with three repeats, marked as authored (planned in Hypotrail's real-assistant thread) (drive, 2026-11-26). No pair of the population is dropped: `answers.jsonl` and `population.json` list the same pairs.
+- A pair the adapter answers `failed` keeps its line, with the reason in `metadata.reason`. A `failed` answer without `metadata.reason` is refused: a fixture line is refused when the fixture is read (exit 2, nothing recorded), and any other adapter's answer closes its run `failed` without a reason, which is not exported (exit 2). A pair the run did not reach (a ceiling, a stop) is a `missing` line whose `metadata.reason` is the reason the run stopped. A pair the scripted fixture holds no answer for (any `repeat` but 0 of the twin's fixtures) is a `missing` line with `metadata.reason` `no_answer`, as Hypotrail counts an Episode its log does not hold. The scripted adapter never replays repeat 0's answer for another repeat: that would fake repeats and show a false zero variance. Repeated material will come from a separate authored fixture with three repeats, marked as authored (planned in Hypotrail's real-assistant thread) (drive, 2026-11-26). No pair of the population is dropped: `answers.jsonl` and `population.json` list the same pairs.
 - In `usage`, a measure (`tokens`, `latency_seconds`, `cost_usd`) an entry does not give is exported `null`, never 0.
 
 ## 3. The wall
@@ -98,8 +98,9 @@ The held-out set is the `public_check` Partition of the twin.
 
 - A `PROXY` line without a `rule`, or a `HUMAN` line without `words`, is refused.
 - The conductor's process refuses to write `HUMAN`, whatever it is given.
+- The writing process is named by `AGENTKIT_PROCESS`, which the conductor and the evaluator entry point set for themselves and their children; unset, it is `cli`. A `HUMAN` line is written only by `agentkit decide --mark human --words-file FILE` in an unmarked process. A decision cites a run of the ledger (`--run`), a stop file (`--stop`) or a pull request (`--pull-request`); anything else is refused (exit 2). The ids are `K-0001`, `K-0002`, and so on.
 - `HUMAN` means "a person's words were transcribed"; it does not authenticate anyone. The authenticated act is a pull request merged from a human account. The log says which.
-- `agentkit cite ID` prints the line's citation (`kit-citation/1`), which a Hypotrail Decision may hold as its `source`. Its level is derived, never stored: `pr` for a `HUMAN` line that cites a pull request in that form, `relayed` for any other `HUMAN` line, `none` for a `PROXY` line.
+- `agentkit cite ID` prints the line's citation (`kit-citation/1`), which a Hypotrail Decision may hold as its `source`. It is refused (exit 2) unless the line is, as it is now, in the log at the commit checked out. Its level is derived, never stored: `pr` for a `HUMAN` line that cites a pull request in that form, `relayed` for any other `HUMAN` line, `none` for a `PROXY` line.
 - `keep-higher-dev-score@1` (`agentkit.rules`) answers `keep_after_comparison` from the two dev `text_facts_success` shares of a Comparison: it keeps the Candidate when its share is higher, and the Control otherwise, a tie included (drive, 2026-11-26).
 - These marks belong to the kit. They never become Decisions in a Hypotrail Study, and a Hypotrail Decision never becomes a kit mark: the two are reviewed apart.
 
@@ -137,14 +138,26 @@ A run that would exceed `dev_runs` or `held_out_readings`, or a live run under a
 | Exit | Meaning |
 |---|---|
 | 0 | Done |
-| 2 | Invalid input (a Case file, a fixture, a budget file) |
+| 2 | Invalid input (a Case file, a fixture, a budget file, a stops file, a refused decision) |
 | 3 | A stop rule fired on this run: a stop file is written |
 | 5 | An open stop blocks new runs |
 | 7 | Gate: a blocking question has no `HUMAN` answer |
 | 8 | Budget: this run would exceed a limit |
 | 9 | Held-out refused outside the evaluator job |
 
-A stop is resumed only by a `HUMAN` decision that cites it. In automatic mode, a stop parks the conductor and leaves a note for the person.
+`stops.json`, versioned with the code and read from the working directory as `budget.json` is, holds the stop rules (K-0001, a `PROXY` decision under D-166). Both apply to dev runs only:
+
+| Rule | Fires on |
+|---|---|
+| `budget-reached@1` | The dev run that spends the last of the `dev_runs` of `budget.json` |
+| `failed-share@1` | A dev run whose `failed` lines are more than the share `above` (0.2) of its `produced` and `failed` lines. `missing` lines do not count: the scripted repeats beyond a fixture are `missing` by design (section 2.4) |
+
+- A rule is checked on a run the harness completes. A run it stops keeps its exit: 8 at a live ceiling, 1 on a provider error. It fires no rule.
+- A fired rule writes `stops/STOP-<run>.json` (`id`, `rule`, `rules`, `run`, `time`), the ledger record of the run names the stop, and `agentkit run` exits 3. `agentkit export` with the options of a run exports it, then exits 3.
+- While a stop is open, every run exits 5 with a ledger record `refused` whose `reason` is `stop_open`, and calls no adapter. This is checked after the held-out refusal and before the budget.
+- A missing or malformed `stops.json` is invalid input (exit 2).
+
+A stop is resumed only by a `HUMAN` decision that cites it in `source.stop`; a `PROXY` decision that cites it resumes nothing. In automatic mode, a stop parks the conductor and leaves a note for the person.
 
 ## 7. Driving the kit
 

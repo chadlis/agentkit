@@ -26,7 +26,12 @@ def dev_run(workload_dir: Path) -> int:
 def test_a_dev_budget_of_2_runs_twice_then_refuses_the_third_with_exit_8_and_the_ledger_counts_2_completed_and_1_refused(workload_dir, monkeypatch):
     write_budget(dev_runs=2)
     calls = count_adapter_calls(monkeypatch)
-    assert [dev_run(workload_dir) for _ in range(3)] == [0, 0, 8]
+    # The second run spends the last dev run and fires budget-reached@1 (exit 3); a person's words resume its stop.
+    assert [dev_run(workload_dir) for _ in range(2)] == [0, 3]
+    words = Path("words.txt")
+    words.write_text("Example words written for this test, not a person's: resume.\n", encoding="utf-8")
+    assert main(["decide", "--mark", "human", "--words-file", str(words), "--question", "Resume?", "--option", "resume", "--stop", "STOP-r-0002"]) == 0
+    assert dev_run(workload_dir) == 8
     assert len(calls) == 2 * 30
     assert counts(read_records())["dev"] == {"completed": 2, "failed": 0, "refused": 1, "running": 0}
     refused = read_records()[-1]

@@ -9,6 +9,8 @@ from agentkit.adapters import live, scripted
 
 # The `origin` of a line, by the adapter that produced it.
 ORIGINS = {scripted.NAME: scripted.ORIGIN, live.NAME: live.ORIGIN}
+# The reason of a pair the adapter returned no answer for, such as one its scripted fixture does not hold.
+NO_ANSWER = "no_answer"
 USAGE_MEASURES = ("tokens", "latency_seconds", "cost_usd")
 
 
@@ -20,7 +22,7 @@ def with_unknown_measures(usage: dict) -> dict:
 def export(run_id: str, out: Path, ledger_dir: Path = ledger.LEDGER_DIR) -> Counter:
     """Writes one line per (Case, Repeat) of the closed run `run_id`; returns the count of each observation status.
 
-    A pair a stopped run never reached is `missing`, with the reason the run stopped in its `metadata`."""
+    A pair a stopped run never reached is `missing`, with the reason the run stopped in its `metadata`; a pair the adapter returned no answer for is `missing` with the reason `no_answer`."""
     record, answers = ledger.closed_run(ledger_dir, run_id)
     pairs = [(case_id, repeat) for case_id, repeat in record["pairs"]]
     lines = []
@@ -34,7 +36,7 @@ def export(run_id: str, out: Path, ledger_dir: Path = ledger.LEDGER_DIR) -> Coun
         elif (case_id, repeat) not in answers and record.get("reason") is not None:
             line |= {"observation_status": "missing", "metadata": {"reason": record["reason"]}}
         else:
-            line["observation_status"] = "missing"
+            line |= {"observation_status": "missing", "metadata": {"reason": NO_ANSWER}}
         if record["adapter"] in ORIGINS:
             line["origin"] = ORIGINS[record["adapter"]]
         if record["configuration"] is not None:
