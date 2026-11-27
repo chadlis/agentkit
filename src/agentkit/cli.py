@@ -72,7 +72,13 @@ def build_parser() -> argparse.ArgumentParser:
     evaluate.add_argument("--workload-dir", required=True, type=Path, metavar="DIR", help="the Workload directory of a Hypotrail checkout (for example hypotrail/examples/chinook_prose)")
     evaluate.add_argument("--candidate", required=True, metavar="NAME", help="the frozen Configuration to read: the scripted fixture fixtures/answers-NAME.jsonl of the Workload")
     evaluate.add_argument("--out", required=True, type=Path, metavar="OUT", help="an empty or new directory for the published files, aggregate.json and aggregate.md")
+    evaluate.add_argument("--reservations-checkout", type=Path, metavar="DIR", help="the current Agentkit main checkout used to verify the job's reservation")
     evaluate.set_defaults(handler=_evaluate)
+    verify = commands.add_parser("verify-reservation", help="the evaluator workflow checks its reservation before retrieving the Workload")
+    verify.add_argument("--candidate", required=True, metavar="NAME", help="the Candidate named by the reservation")
+    verify.add_argument("--hypotrail-commit", required=True, metavar="SHA", help="the pinned Hypotrail commit")
+    verify.add_argument("--reservations-checkout", required=True, type=Path, metavar="DIR", help="the current Agentkit main checkout")
+    verify.set_defaults(handler=_verify_reservation)
     return parser
 
 
@@ -234,9 +240,24 @@ def _conduct(args: argparse.Namespace) -> int:
     return CONDUCT_EXITS[journal.outcome]
 
 
+def _verify_reservation(args: argparse.Namespace) -> int:
+    try:
+        evaluator_job.verify_reservation(args.candidate, args.hypotrail_commit, args.reservations_checkout)
+    except HeldOutRefused as error:
+        print(f"refused: {error}", file=sys.stderr)
+        return EXIT_HELD_OUT_REFUSED
+    except budget.BudgetRefused as error:
+        print(f"refused by the budget ({error.reason}): {error}", file=sys.stderr)
+        return EXIT_BUDGET
+    except INVALID as error:
+        print(f"invalid input: {error}", file=sys.stderr)
+        return EXIT_INVALID_INPUT
+    return 0
+
+
 def _evaluate(args: argparse.Namespace) -> int:
     try:
-        aggregate = evaluator_job.read(args.workload_dir, args.candidate, args.out)
+        aggregate = evaluator_job.read(args.workload_dir, args.candidate, args.out, args.reservations_checkout)
     except HeldOutRefused as error:
         print(f"refused: {error}", file=sys.stderr)
         return EXIT_HELD_OUT_REFUSED

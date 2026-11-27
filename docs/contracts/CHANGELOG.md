@@ -11,4 +11,4 @@ The contracts this repository owns, under `contracts/` (all but `agent-answers-1
 | 2026-11-27 | `kit-decision/1` | 1 | Conformance tests enforce the existing timestamp format | chadlis/agentkit#29 |
 | 2026-11-27 | `kit-aggregate/1` | 1 | Document the candidate field and the evaluator's publication boundary | chadlis/agentkit#29 |
 | 2026-11-27 | `kit-status/1` | 1 | Document the status object inside the C6 JSON response envelope | chadlis/agentkit#29 |
-| 2026-11-27 | `kit-aggregate/1` | 1 | Document the per-Candidate and total reading limits and the separate metadata record | chadlis/agentkit#27 (D-220 rework) |
+| 2026-11-27 | `kit-aggregate/1` | 1 | Document the per-Candidate and total reading limits, durable reservations and owner-only returns | Replacement for chadlis/agentkit#27 (D-220 and D-234) |

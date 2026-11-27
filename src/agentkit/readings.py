@@ -1,4 +1,4 @@
-"""The committed, metadata-only record of earlier evaluator jobs."""
+"""Write the evaluator outcome using only publishable reading metadata."""
 
 import hashlib
 import json
@@ -6,10 +6,8 @@ import os
 import re
 from pathlib import Path
 
-from agentkit import budget
 from agentkit.conductor import CONFIGURATION
 
-RECORD_FILE = Path("readings.jsonl")
 LINE_FILE = "reading.jsonl"
 KEYS = ("candidate", "configuration_digest", "job_commit", "job_run", "status")
 STATUSES = ("completed", "failed")
@@ -37,50 +35,6 @@ def _well_formed(item) -> bool:
         and JOB_RUN.fullmatch(item["job_run"]) is not None
         and item["status"] in STATUSES
     )
-
-
-def load(path: Path = RECORD_FILE) -> list[dict]:
-    """Read and validate the committed record. Missing or malformed input fails closed."""
-    try:
-        lines = path.read_text(encoding="utf-8").splitlines()
-    except (OSError, UnicodeDecodeError) as error:
-        raise RecordError(f"cannot read {path}") from error
-    items = []
-    jobs = set()
-    for number, line in enumerate(lines, start=1):
-        if not line.strip():
-            continue
-        try:
-            item = json.loads(line)
-        except json.JSONDecodeError as error:
-            raise RecordError(f"{path}, line {number}: invalid JSON") from error
-        if not _well_formed(item):
-            raise RecordError(f"{path}, line {number}: invalid reading metadata")
-        if item["job_run"] in jobs:
-            raise RecordError(f"{path}, line {number}: duplicate job run")
-        jobs.add(item["job_run"])
-        items.append(item)
-    return items
-
-
-def check_limits(recorded: list[dict], spent: list[dict], candidate: str, limits: budget.Budget) -> None:
-    """Check what the Candidate's name and the prior reading records establish."""
-    if limits.held_out_readings == 0:
-        raise budget.BudgetRefused("held_out_readings", "the budget allows no held-out reading of this Candidate")
-    if any(item["candidate"] == candidate for item in recorded) or any(item.get("candidate") == candidate for item in spent):
-        raise budget.BudgetRefused("held_out_readings", "this Candidate has had its held-out reading")
-    committed_jobs = {item["job_run"] for item in recorded}
-    total = limits.held_out_total_readings
-    if len(recorded) + sum(item.get("job_run") not in committed_jobs for item in spent) >= total:
-        raise budget.BudgetRefused("held_out_total_readings", f"the {total} held-out readings are spent")
-
-
-def check_configuration(recorded: list[dict], spent: list[dict], settings: dict | None) -> str:
-    """Refuse a previously read Configuration under a different name and return its digest otherwise."""
-    configuration = digest(settings)
-    if any(item["configuration_digest"] == configuration for item in recorded) or any(item["configuration"] == settings for item in spent):
-        raise budget.BudgetRefused("held_out_readings", "this Candidate has had its held-out reading")
-    return configuration
 
 
 def write(out: Path, candidate: str, configuration: str, job_commit: str, job_run: str, status: str) -> None:

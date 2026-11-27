@@ -11,6 +11,7 @@ import yaml
 
 from agentkit import evaluator_job, ledger
 from agentkit.cli import main
+from conftest import reservation_history
 from test_held_out import evaluator_job as mark_evaluator
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -35,15 +36,21 @@ def record(name, run, *, status="completed", configuration=None):
     }
 
 
-def commit_readings(*items):
-    Path("readings.jsonl").write_text("".join(json.dumps(item) + "\n" for item in items), encoding="utf-8")
+def reservation(name, run, *, configuration=None):
+    event = record(name, run, configuration=configuration)
+    del event["status"]
+    return {"kind": "reserve", "hypotrail_commit": COMMIT, **event}
 
 
 @pytest.fixture
 def synthetic_job(monkeypatch, tmp_path):
     mark_evaluator(monkeypatch)
+    monkeypatch.setenv("GITHUB_RUN_ATTEMPT", "1")
+    directory = tmp_path / "budget-checkout"
+    append = reservation_history(directory)
     monkeypatch.setattr(evaluator_job, "job", lambda: evaluator_job.Job("example/kit", COMMIT, RUN, "example"))
     monkeypatch.setattr(evaluator_job, "checkout_commit", lambda directory: COMMIT)
+    monkeypatch.setattr(evaluator_job.reservations, "verify_frozen_fixture", lambda *args: None)
     monkeypatch.setattr(
         evaluator_job,
         "ScriptedAdapter",
@@ -56,18 +63,21 @@ def synthetic_job(monkeypatch, tmp_path):
         return Counter(produced=1), {"aggregates": [], "observation_set_ids": [], "assessment_ids": []}
 
     monkeypatch.setattr(evaluator_job, "_inside", inside)
-    commit_readings()
 
     def read(name, out="published"):
-        return main(["evaluate", "--workload-dir", str(tmp_path), "--candidate", name, "--out", out])
+        return main([
+            "evaluate", "--workload-dir", str(tmp_path), "--candidate", name, "--out", out,
+            "--reservations-checkout", str(directory),
+        ])
 
-    return read, seen
+    return read, seen, append
 
 
 @pytest.mark.parametrize("status", ["completed", "failed"])
 def test_a_committed_reading_refuses_the_same_candidate_from_an_empty_ledger(synthetic_job, status):
-    read, seen = synthetic_job
-    commit_readings(record("first", 1, status=status))
+    read, seen, append = synthetic_job
+    append(reservation("first", 1))
+    Path("earlier-outcome.jsonl").write_text(json.dumps(record("first", 1, status=status)) + "\n", encoding="utf-8")
     assert read("first") == 8
     assert seen == []
     assert not Path("published").exists()
@@ -75,7 +85,8 @@ def test_a_committed_reading_refuses_the_same_candidate_from_an_empty_ledger(syn
 
 
 def test_the_same_name_cannot_be_read_again_with_changed_settings_in_the_same_directory(synthetic_job, monkeypatch):
-    read, seen = synthetic_job
+    read, seen, append = synthetic_job
+    append(reservation("first", 100))
     assert read("first") == 0
     monkeypatch.setattr(
         evaluator_job, "ScriptedAdapter",
@@ -85,12 +96,16 @@ def test_the_same_name_cannot_be_read_again_with_changed_settings_in_the_same_di
     assert seen == ["entered"]
 
 
-def test_another_candidate_is_admitted_up_to_the_total_budget(synthetic_job):
-    read, seen = synthetic_job
-    commit_readings(record("first", 1), record("second", 2, status="failed"))
+def test_another_candidate_is_admitted_up_to_the_total_budget(synthetic_job, monkeypatch):
+    read, seen, append = synthetic_job
+    append(reservation("first", 1))
+    append(reservation("second", 2))
+    append(reservation("third", 100))
     assert read("third") == 0
     assert seen == ["entered"]
     assert json.loads(Path("published/reading.jsonl").read_text()) == record("third", 100)
+    another = "https://github.com/example/kit/actions/runs/101"
+    monkeypatch.setattr(evaluator_job, "job", lambda: evaluator_job.Job("example/kit", COMMIT, another, "example"))
     assert read("fourth", "refused") == 8
     assert seen == ["entered"]
     assert not Path("refused").exists()
@@ -98,8 +113,10 @@ def test_another_candidate_is_admitted_up_to_the_total_budget(synthetic_job):
 
 
 def test_three_committed_readings_refuse_a_fourth_from_an_empty_ledger(synthetic_job):
-    read, seen = synthetic_job
-    commit_readings(record("first", 1), record("second", 2), record("third", 3, status="failed"))
+    read, seen, append = synthetic_job
+    append(reservation("first", 1))
+    append(reservation("second", 2))
+    append(reservation("third", 3))
     assert read("fourth") == 8
     assert seen == []
     assert not Path("published").exists()
@@ -114,8 +131,9 @@ def test_three_committed_readings_refuse_a_fourth_from_an_empty_ledger(synthetic
     ],
 )
 def test_a_known_budget_refusal_happens_before_a_malformed_fixture_is_read(synthetic_job, monkeypatch, names, candidate, reason):
-    read, seen = synthetic_job
-    commit_readings(*(record(name, run) for run, name in enumerate(names, start=1)))
+    read, seen, append = synthetic_job
+    for run, name in enumerate(names, start=1):
+        append(reservation(name, run))
     fixture_reads = []
 
     def malformed(fixture):
@@ -130,16 +148,19 @@ def test_a_known_budget_refusal_happens_before_a_malformed_fixture_is_read(synth
 
 
 def test_a_renamed_configuration_cannot_be_read_again(synthetic_job):
-    read, seen = synthetic_job
-    commit_readings(record("old-name", 1, configuration=settings("new-name")))
+    read, seen, append = synthetic_job
+    append(reservation("old-name", 1, configuration=settings("new-name")))
+    append(reservation("new-name", 100))
     assert read("new-name") == 8
     assert seen == []
 
 
 def test_a_merged_reading_with_a_local_ledger_record_spends_only_once(synthetic_job, monkeypatch):
-    read, seen = synthetic_job
+    read, seen, append = synthetic_job
+    append(reservation("first", 100))
     assert read("first") == 0
-    commit_readings(record("first", 100), record("second", 2))
+    append(reservation("second", 2))
+    append(reservation("third", 101))
     another = "https://github.com/example/kit/actions/runs/101"
     monkeypatch.setattr(evaluator_job, "job", lambda: evaluator_job.Job("example/kit", COMMIT, another, "example"))
     assert read("third", "next-output") == 0
@@ -147,13 +168,14 @@ def test_a_merged_reading_with_a_local_ledger_record_spends_only_once(synthetic_
 
 
 def test_a_counted_failure_leaves_only_its_public_metadata(synthetic_job, monkeypatch, capsys):
-    read, _ = synthetic_job
+    read, _, append = synthetic_job
 
     def fail_after_recording(*args):
         assert json.loads(Path("published/reading.jsonl").read_text()) == record("first", 100, status="failed")
         raise RuntimeError("synthetic detail never published")
 
     monkeypatch.setattr(evaluator_job, "_inside", fail_after_recording)
+    append(reservation("first", 100))
     assert read("first") == 1
     assert [path.name for path in Path("published").iterdir()] == ["reading.jsonl"]
     assert json.loads(Path("published/reading.jsonl").read_text()) == record("first", 100, status="failed")
@@ -161,9 +183,44 @@ def test_a_counted_failure_leaves_only_its_public_metadata(synthetic_job, monkey
     assert [(row["status"], row["reason"], row["pairs"]) for row in ledger.read_records()] == [("failed", "error", [])]
 
 
+def test_a_missing_committed_reservation_refuses_before_the_fixture_is_opened(synthetic_job, monkeypatch):
+    read, seen, _ = synthetic_job
+    monkeypatch.setattr(evaluator_job, "ScriptedAdapter", lambda *args: pytest.fail("opened an unreserved fixture"))
+    assert read("first") == 8
+    assert seen == []
+    assert [row["reason"] for row in ledger.read_records()] == ["reading_reservation"]
+    assert not Path("published").exists()
+
+
+def test_a_configuration_mismatch_uses_no_adapter_calls(synthetic_job):
+    read, seen, append = synthetic_job
+    append(reservation("first", 100, configuration=settings("different")))
+    assert read("first") == 8
+    assert seen == []
+    assert [(row["reason"], row["configuration"]) for row in ledger.read_records()] == [("reading_reservation", None)]
+    assert not Path("published").exists()
+
+
+def test_interruption_after_preflight_keeps_the_reservation_with_no_local_reading(synthetic_job, monkeypatch):
+    read, seen, append = synthetic_job
+    append(reservation("first", 100))
+    append(reservation("second", 2))
+    append(reservation("third", 3))
+    assert main([
+        "verify-reservation", "--candidate", "first", "--hypotrail-commit", COMMIT,
+        "--reservations-checkout", "budget-checkout",
+    ]) == 0
+    assert ledger.read_records() == seen == []
+    another = "https://github.com/example/kit/actions/runs/101"
+    monkeypatch.setattr(evaluator_job, "job", lambda: evaluator_job.Job("example/kit", COMMIT, another, "example"))
+    assert read("fourth") == 8
+    assert [row["reason"] for row in ledger.read_records()] == ["held_out_total_readings"]
+    assert seen == []
+
+
 def test_a_malformed_record_is_refused_without_spending(synthetic_job):
-    read, seen = synthetic_job
-    commit_readings({**record("first", 1), "unexpected": "synthetic"})
+    read, seen, append = synthetic_job
+    append({**reservation("first", 1), "unexpected": "synthetic"})
     assert read("another") == 2
     assert seen == []
     assert ledger.read_records() == []

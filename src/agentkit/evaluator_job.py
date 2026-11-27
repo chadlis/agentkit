@@ -2,7 +2,7 @@
 
 It reads one frozen Configuration, a scripted fixture, on the held-out Partition. The harness's pairs and answers, the export and Hypotrail's Study live in a temporary directory outside the working directory, which the reading deletes when it ends, on an error or SIGTERM too; SIGKILL leaves it. Hypotrail runs as a subprocess: `init`, `import agent`, `assess --scorer text_facts_v1` and `report`. The aggregate report and a separate metadata line leave the reading.
 
-The kit's ledger counts the reading in a record that lists no pair, before the first adapter call, and the committed readings record carries Candidate and total limits across evaluator jobs. Once counted, the reading is closed `failed` by any error, SIGINT or SIGTERM. The reading writes no decision.
+The committed reservation counts the reading before the Workload is retrieved. The local ledger reports the reading without its pairs. Once started, the reading is closed `failed` by any error, SIGINT or SIGTERM. The reading writes no decision.
 
 What it prints never names a held-out Case: an error of Hypotrail is reported by its command and exit code only, a fixture error without its pair, and any other error after the count by its type only."""
 
@@ -17,7 +17,7 @@ from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
 
-from agentkit import budget, evaluator, harness, ledger, readings
+from agentkit import budget, evaluator, harness, ledger, readings, reservations
 from agentkit.adapters.scripted import NAME as SCRIPTED, FixtureError, ScriptedAdapter
 from agentkit.cases import WorkloadError
 from agentkit.conductor import CONFIGURATION, HypotrailFailed, call_hypotrail
@@ -109,7 +109,29 @@ def _terminated(number: int, frame) -> None:
     raise SystemExit(128 + number)
 
 
-def read(workload_dir: Path, candidate: str, out: Path) -> dict:
+def authorise(candidate: str, hypotrail_commit: str, reservations_checkout: Path | None, where: Job, limits: budget.Budget) -> reservations.Permit:
+    if CONFIGURATION.fullmatch(candidate) is None or COMMIT.fullmatch(hypotrail_commit) is None:
+        raise WorkloadError("the reservation requires a named Candidate and a pinned Hypotrail commit")
+    if reservations_checkout is None:
+        raise readings.RecordError("the evaluator requires a current Agentkit main reservation checkout")
+    return reservations.authorise(
+        reservations_checkout, limits, candidate=candidate, run=where.run, attempt=os.environ.get("GITHUB_RUN_ATTEMPT", ""),
+        job_commit=where.commit, hypotrail_commit=hypotrail_commit,
+    )
+
+
+def verify_reservation(candidate: str, hypotrail_commit: str, reservations_checkout: Path) -> None:
+    """Refuse an unreserved dispatch before the workflow retrieves the Workload."""
+    if not evaluator.in_evaluator_job():
+        harness.refuse_held_out(evaluator.HELD_OUT, SCRIPTED, None)
+    try:
+        authorise(candidate, hypotrail_commit, reservations_checkout, job(), budget.load())
+    except budget.BudgetRefused as refusal:
+        ledger.refuse_run(ledger.LEDGER_DIR, partition=evaluator.HELD_OUT, adapter=SCRIPTED, configuration=None, reason=refusal.reason)
+        raise
+
+
+def read(workload_dir: Path, candidate: str, out: Path, reservations_checkout: Path | None = None) -> dict:
     """Reads `candidate` on the held-out Partition under the evaluator entry point, writes the published files in `out`, and returns `aggregate.json`.
 
     Outside a job of the evaluator workflow, the reading is recorded `refused` with no pair and raises `HeldOutRefused`, before the fixture is read. A reading the report could not name (an `out` that holds files, a job variable or a checkout commit missing, a candidate that is no fixture) is invalid input and records nothing. An open stop or a spent budget of held-out readings records it `refused` and raises, with no adapter call. Once counted, any error, SIGINT or SIGTERM closes it `failed`, spent, and retains its metadata: a failing Hypotrail command raises `HypotrailFailed`, any other error `ReadingFailed`."""
@@ -122,23 +144,25 @@ def read(workload_dir: Path, candidate: str, out: Path) -> dict:
             raise WorkloadError(f"{out} holds files: the published directory is empty or new, so that only the aggregate report leaves the job")
         where = job()
         hypotrail_commit = checkout_commit(workload_dir)
-        recorded = readings.load()
         limits, _, records = harness.prepare_run(evaluator.HELD_OUT, SCRIPTED, None)
         spent = [item for item in records if item["set"] == evaluator.HELD_OUT and item["status"] != "refused"]
-        settings = None
         try:
-            readings.check_limits(recorded, spent, candidate, limits)
+            permit = authorise(candidate, hypotrail_commit, reservations_checkout, where, limits)
+            if any(item.get("candidate") == candidate or item.get("job_run") == where.run for item in spent):
+                raise budget.BudgetRefused("held_out_readings", "this Candidate has had its held-out reading")
+            reservations.verify_frozen_fixture(workload_dir, candidate, permit.first_hypotrail_commit)
             adapter = ScriptedAdapter(workload_dir / "fixtures" / f"answers-{candidate}.jsonl")
-            settings = adapter.settings
-            configuration = readings.check_configuration(recorded, spent, settings)
+            configuration = readings.digest(adapter.settings)
+            if configuration != permit.configuration_digest:
+                raise budget.BudgetRefused("reading_reservation", "the Candidate Configuration does not match the reservation")
         except FixtureError as error:
             raise WorkloadError(error.keyless) from None
         except budget.BudgetRefused as refusal:
-            ledger.refuse_run(ledger.LEDGER_DIR, partition=evaluator.HELD_OUT, adapter=SCRIPTED, configuration=settings, reason=refusal.reason)
+            ledger.refuse_run(ledger.LEDGER_DIR, partition=evaluator.HELD_OUT, adapter=SCRIPTED, configuration=None, reason=refusal.reason)
             raise
         readings.write(out, candidate, configuration, where.commit, where.run, "failed")
         reading_id = ledger.open_run(
-            ledger.LEDGER_DIR, partition=evaluator.HELD_OUT, adapter=SCRIPTED, configuration=adapter.settings,
+            ledger.LEDGER_DIR, partition=evaluator.HELD_OUT, adapter=SCRIPTED, configuration=None,
             pairs=[], candidate=candidate, job_run=where.run,
         )
         # SIGTERM raises, as SIGINT does, so that the reading is closed and the `finally` below deletes the temporary directory.
