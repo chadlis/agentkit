@@ -19,7 +19,12 @@ def write_record(*lines) -> Path:
 
 
 def test_the_committed_record_is_a_valid_readings_record():
-    readings.load(ROOT / "readings.jsonl")
+    try:
+        readings.load(ROOT / "readings.jsonl")
+        refusal = None
+    except readings.RecordError as error:
+        refusal = str(error)
+    assert refusal is None
 
 
 def test_a_record_of_well_formed_lines_is_read_in_order():
