@@ -1,7 +1,7 @@
 name: evaluator
 
 # The held-out reading (docs/design.md, sections 1 and 3): started by a person, by hand, in the protected environment `held-out`.
-# Only the aggregate report leaves the job; the per-Case files stay on its runner.
+# Only the aggregate report and the reading metadata leave the job.
 on:
   workflow_dispatch:
     inputs:
@@ -12,34 +12,66 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: held-out-evaluator
+  cancel-in-progress: false
+
 jobs:
   held-out-reading:
+    if: ${{ github.ref == 'refs/heads/main' && github.run_attempt == '1' }}
     runs-on: ubuntu-latest
     environment: held-out
     steps:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          ref: refs/heads/main
+          path: budget-checkout
+          fetch-depth: 0
+          persist-credentials: false
       - id: pin
         run: echo "ref=$(tr -d '[:space:]' < hypotrail.pin)" >> "$GITHUB_OUTPUT"
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.13"
+      - run: uv sync --locked
+      - env:
+          CANDIDATE: ${{ inputs.candidate }}
+          HYPOTRAIL_REF: ${{ steps.pin.outputs.ref }}
+        run: uv run --locked --no-sync agentkit verify-reservation --candidate "$CANDIDATE" --hypotrail-commit "$HYPOTRAIL_REF" --reservations-checkout budget-checkout
       - uses: actions/checkout@v4
         with:
           repository: chadlis/hypotrail
           ref: ${{ steps.pin.outputs.ref }}
           path: hypotrail
+          fetch-depth: 0
           persist-credentials: false
-      - uses: astral-sh/setup-uv@v6
-        with:
-          python-version: "3.13"
-      - run: uv sync --locked
       - run: uv pip install ./hypotrail
       # The scripted adapter makes no model call, and the job holds no key (AGENTS.md).
       - env:
           CANDIDATE: ${{ inputs.candidate }}
-        run: uv run --locked --no-sync agentkit evaluate --workload-dir hypotrail/examples/chinook_prose --candidate "$CANDIDATE" --out published
+        run: uv run --locked --no-sync agentkit evaluate --workload-dir hypotrail/examples/chinook_prose --candidate "$CANDIDATE" --out published --reservations-checkout budget-checkout
       - run: cat published/aggregate.md >> "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@v4
         with:
           name: aggregate
-          path: published/
+          path: |
+            published/aggregate.json
+            published/aggregate.md
           if-no-files-found: error
+      - if: ${{ always() && hashFiles('published/reading.jsonl') != '' }}
+        run: |
+          {
+            echo "Outcome metadata for the reservation already committed on main."
+            echo
+            echo '```'
+            cat published/reading.jsonl
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+      - if: ${{ always() && hashFiles('published/reading.jsonl') != '' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: reading
+          path: published/reading.jsonl

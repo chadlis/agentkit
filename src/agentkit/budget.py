@@ -11,6 +11,7 @@ from agentkit.cases import DEV
 
 BUDGET_FILE = Path("budget.json")
 KEYS = ("reason", "dev_runs", "held_out_readings", "live", "prices")
+TOTAL_READINGS = "held_out_total_readings"
 CEILING_KEYS = ("calls", "tokens", "usd")
 PRICE_KEYS = ("input_usd_per_mtok", "output_usd_per_mtok", "as_of", "source")
 CEILING_REASONS = ("call_ceiling", "token_ceiling", "cost_ceiling")
@@ -54,6 +55,13 @@ class Budget:
     held_out_readings: int
     live: Ceiling
     prices: dict
+    held_out_total_readings: int | None = None
+
+    def protected_total(self) -> int:
+        """A protected read requires a committed total, even when dev uses a legacy budget."""
+        if self.held_out_total_readings is None:
+            raise BudgetError(f"{BUDGET_FILE}: protected readings require {TOTAL_READINGS}")
+        return self.held_out_total_readings
 
     def price(self, model: str) -> Price:
         """The price of `model`; a model with no price refuses the run."""
@@ -77,13 +85,22 @@ def _amount(value) -> bool:
 
 def load(path: Path = BUDGET_FILE) -> Budget:
     try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as error:
+        content = path.read_bytes()
+    except OSError as error:
         raise BudgetError(f"{path}: {error}") from error
-    if not isinstance(data, dict) or set(data) != set(KEYS) or not isinstance(data["reason"], str):
-        raise BudgetError(f"{path}: the budget is an object of exactly {', '.join(KEYS)}")
-    if not _count(data["dev_runs"]) or not _count(data["held_out_readings"]):
-        raise BudgetError(f"{path}: dev_runs and held_out_readings are non-negative integers")
+    return parse(content, path)
+
+
+def parse(content: bytes, path: Path | str) -> Budget:
+    """Validate budget bytes read from a working directory or a committed Git object."""
+    try:
+        data = json.loads(content.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise BudgetError(f"{path}: {error}") from error
+    if not isinstance(data, dict) or data.keys() - {TOTAL_READINGS} != set(KEYS) or not isinstance(data["reason"], str):
+        raise BudgetError(f"{path}: the budget is an object of {', '.join(KEYS)} with optional {TOTAL_READINGS}")
+    if not all(_count(data[key]) for key in ("dev_runs", "held_out_readings")) or (TOTAL_READINGS in data and not _count(data[TOTAL_READINGS])):
+        raise BudgetError(f"{path}: dev_runs and the held-out limits are non-negative integers")
     live = data["live"]
     if not isinstance(live, dict) or set(live) != set(CEILING_KEYS) or not _count(live["calls"]) or not _count(live["tokens"]) or not _amount(live["usd"]):
         raise BudgetError(f"{path}: live is {{calls, tokens, usd}}, non-negative")
@@ -95,7 +112,7 @@ def load(path: Path = BUDGET_FILE) -> Budget:
             or not isinstance(entry["as_of"], str) or not isinstance(entry["source"], str)
         ):
             raise BudgetError(f"{path}: the price of {model!r} is {{{', '.join(PRICE_KEYS)}}}, with prices above 0 so that the spend ceiling binds")
-    return Budget(data["dev_runs"], data["held_out_readings"], Ceiling(live["calls"], live["tokens"], live["usd"]), prices)
+    return Budget(data["dev_runs"], data["held_out_readings"], Ceiling(live["calls"], live["tokens"], live["usd"]), prices, data.get(TOTAL_READINGS))
 
 
 def check_run(budget: Budget, records: list[dict], partition: str, configuration: dict | None, is_live: bool) -> None:
@@ -104,8 +121,11 @@ def check_run(budget: Budget, records: list[dict], partition: str, configuration
     if partition == DEV and len(spent) >= budget.dev_runs:
         raise BudgetRefused("dev_runs", f"the {budget.dev_runs} dev runs of the cycle are spent")
     if partition == evaluator.HELD_OUT:
+        total_readings = budget.protected_total()
         readings = [record for record in spent if record["configuration"] == configuration]
         if len(readings) >= budget.held_out_readings:
             raise BudgetRefused("held_out_readings", f"this Configuration has had its {budget.held_out_readings} held-out readings")
+        if len(spent) >= total_readings:
+            raise BudgetRefused(TOTAL_READINGS, f"the {total_readings} held-out readings are spent")
     if is_live and 0 in (budget.live.calls, budget.live.tokens, budget.live.usd):
         raise BudgetRefused("live", "the live ceiling of the budget is 0")

@@ -61,6 +61,18 @@ def test_a_run_without_a_budget_file_is_invalid_input_and_records_nothing(worklo
     assert read_records() == []
 
 
+def test_a_legacy_budget_can_still_run_dev_and_conduct(workload_dir):
+    path = Path("budget.json")
+    limits = json.loads(path.read_text(encoding="utf-8"))
+    del limits["held_out_total_readings"]
+    path.write_text(json.dumps(limits), encoding="utf-8")
+    assert dev_run(workload_dir) == 0
+    assert main([
+        "conduct", "--workload-dir", str(workload_dir), "--set", "dev", "--configurations", "concise,verbose",
+    ]) == 0
+    assert counts(read_records())["dev"]["completed"] == 3
+
+
 def test_the_versioned_budget_turns_live_spending_off():
     budget = json.loads((ROOT / "budget.json").read_text(encoding="utf-8"))
     assert budget["live"] == {"calls": 0, "tokens": 0, "usd": 0}
