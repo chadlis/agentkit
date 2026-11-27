@@ -172,3 +172,31 @@ def test_status_lists_the_decisions_with_their_marks_and_levels_and_the_open_sto
     # K-0002 cites the stop, so it is resumed: no stop is open.
     assert "Open stops: none" in printed
     assert WORDS.strip() not in "\n".join(printed)
+
+
+def conductor_marker(kit, pid: int) -> Path:
+    """A conductor marker file, as the conductor writes it when its loop starts."""
+    marker = kit["root"] / "ledger" / "conductor" / "c-0001.json"
+    marker.parent.mkdir(parents=True, exist_ok=True)
+    marker.write_text(json.dumps({"pid": pid, "start_time": "2026-11-27T00:00:00Z"}), encoding="utf-8")
+    return marker
+
+
+def test_while_a_conductor_marker_names_a_live_process_decide_refuses_human_whatever_agentkit_process_says(kit):
+    conductor_marker(kit, os.getpid())
+    for env in ({}, {decisions.PROCESS_VARIABLE: "cli"}):
+        refused = agentkit("decide", "--mark", "human", "--words-file", kit["words"], "--stop", "STOP-r-0002", "--question", "q", "--option", "o", env=env)
+        assert refused.returncode == 2, refused.stdout + refused.stderr
+    assert human(kit) == 2
+    assert log(kit) == []
+    assert proxy() == 0
+    assert [line["mark"] for line in log(kit)] == ["PROXY"]
+
+
+def test_a_stale_conductor_marker_whose_process_is_gone_is_reported_and_ignored(kit):
+    finished = subprocess.run([sys.executable, "-c", "import os; print(os.getpid())"], capture_output=True, text=True, check=True)
+    marker = conductor_marker(kit, int(finished.stdout))
+    written = agentkit("decide", "--mark", "human", "--words-file", kit["words"], "--stop", "STOP-r-0002", "--question", "q", "--option", "o")
+    assert written.returncode == 0, written.stdout + written.stderr
+    assert str(marker.relative_to(kit["root"])) in written.stderr
+    assert [line["mark"] for line in log(kit)] == ["HUMAN"]
