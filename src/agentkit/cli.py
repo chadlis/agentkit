@@ -249,7 +249,7 @@ def _evaluate(args: argparse.Namespace) -> int:
     except INVALID as error:
         print(f"invalid input: {error}", file=sys.stderr)
         return EXIT_INVALID_INPUT
-    except conductor.HypotrailFailed as error:
+    except (conductor.HypotrailFailed, evaluator_job.ReadingFailed) as error:
         print(f"the reading failed and is spent; nothing is published: {error}", file=sys.stderr)
         return EXIT_RUN_FAILED
     reading = aggregate["reading"]

@@ -18,6 +18,7 @@ import jsonschema
 import pytest
 
 from agentkit import conductor, decisions, evaluator_job
+from agentkit.cases import WorkloadError
 from agentkit.cli import main
 from agentkit.ledger import read_records
 from test_conduct import files_holding
@@ -25,6 +26,7 @@ from test_dev_end_to_end import ROOT, agentkit_command, hypotrail_command, kit_c
 
 SCHEMA = ROOT / "contracts" / "kit-aggregate-1" / "aggregate.schema.json"
 JOB_SHA = "a8" * 20
+HELD_OUT_FIXTURE = "a8-held-out"
 # What GitHub Actions sets in a job of the evaluator workflow, imitated.
 JOB = {
     "GITHUB_ACTIONS": "true",
@@ -50,13 +52,61 @@ def evaluate(workload_dir: Path, out: Path, candidate: str = "concise", env: dic
     return subprocess.run(evaluate_command(workload_dir, out, candidate), env=environment(env), capture_output=True, text=True, timeout=600)
 
 
-def held_out_texts(workload_dir: Path) -> list[str]:
-    """Every held-out Case id, question and Reference text, as the twin holds them."""
+def json_lines(path: Path) -> list[dict]:
+    return [json.loads(text) for text in path.read_text(encoding="utf-8").splitlines() if text.strip()]
+
+
+def held_out_cases(workload_dir: Path) -> tuple[list[dict], dict[str, dict]]:
+    """The held-out Cases, and their References by Case id, as the twin holds them."""
     workload = json.loads((workload_dir / "workload.json").read_text(encoding="utf-8"))
-    cases = [json.loads(text) for text in (workload_dir / workload["cases"]["public_check"]).read_text(encoding="utf-8").splitlines() if text.strip()]
-    held_out = [case["case_id"] for case in cases]
-    references = [json.loads(text) for text in (workload_dir / workload["references"]).read_text(encoding="utf-8").splitlines() if text.strip()]
-    return held_out + [case["question"] for case in cases] + [reference["reference_text"] for reference in references if reference["case_id"] in held_out]
+    cases = json_lines(workload_dir / workload["cases"]["public_check"])
+    held_out = {case["case_id"] for case in cases}
+    return cases, {reference["case_id"]: reference for reference in json_lines(workload_dir / workload["references"]) if reference["case_id"] in held_out}
+
+
+def entity_ids(reference: dict) -> list[str]:
+    """The entity ids a Reference expects, as an answer names them: `album 1`."""
+    return [f"{item['kind']} {item['value']}" for item in reference["expected_identifiers"]]
+
+
+def held_out_texts(workload_dir: Path) -> list[str]:
+    """Every held-out Case id, question, Reference text and entity id of a Reference."""
+    cases, references = held_out_cases(workload_dir)
+    entities = sorted({entity for reference in references.values() for entity in entity_ids(reference)})
+    return [case["case_id"] for case in cases] + [case["question"] for case in cases] + [reference["reference_text"] for reference in references.values()] + entities
+
+
+def held_out_workload(workload_dir: Path, tmp_path: Path) -> tuple[Path, list[str]]:
+    """A copy of the Workload, committed in a git repository of its own, with a test-only fixture, `fixtures/answers-a8-held-out.jsonl`.
+
+    The fixture holds a produced answer for every held-out Case, naming the entity ids its Reference expects, so that answers flow through the job. Returns the copy and the answers."""
+    copy = tmp_path / "a8-examples" / workload_dir.name
+    shutil.copytree(workload_dir, copy)
+    cases, references = held_out_cases(workload_dir)
+    answers, lines = [], []
+    for number, case in enumerate(cases, start=1):
+        named = entity_ids(references[case["case_id"]])
+        answers.append(f"Held-out answer a8-{number:02d}, written by the test" + (f", naming {' and '.join(named)}." if named else "."))
+        lines.append({"case_id": case["case_id"], "repeat": 0, "observation_status": "produced", "raw_answer": answers[-1], "outcome": "answered", "settings": {"configuration": HELD_OUT_FIXTURE}})
+    (copy / "fixtures" / f"answers-{HELD_OUT_FIXTURE}.jsonl").write_text("".join(json.dumps(line) + "\n" for line in lines), encoding="utf-8")
+    for command in (["init", "--quiet"], ["add", "--all"], ["commit", "--quiet", "-m", "a8: the Workload copy and its held-out fixture"]):
+        subprocess.run(["git", "-c", "user.name=agentkit-e2e", "-c", "user.email=e2e@example.invalid", *command], cwd=copy.parent, check=True, capture_output=True)
+    return copy, answers
+
+
+def fake_hypotrail(tmp_path: Path, script: str) -> dict:
+    """The environment under which `python -m hypotrail` runs `script` instead of Hypotrail."""
+    package = tmp_path / "a8-fake-hypotrail" / "hypotrail"
+    package.mkdir(parents=True)
+    (package / "__init__.py").write_text("", encoding="utf-8")
+    (package / "__main__.py").write_text(script, encoding="utf-8")
+    return {"PYTHONPATH": str(package.parent)}
+
+
+def kit_files() -> list[Path]:
+    """Every file `git status` lists in the clone of the kit the test runs in, ignored ones included."""
+    listed = subprocess.run(["git", "status", "--porcelain", "--ignored", "--untracked-files=all"], capture_output=True, text=True, check=True).stdout.splitlines()
+    return [Path(line[3:]) for line in listed]
 
 
 def published(out: Path) -> list[Path]:
@@ -93,32 +143,35 @@ def test_a_reading_in_an_imitated_evaluator_job_publishes_an_aggregate_report_th
     assert decisions.lines() == []
 
 
-def test_no_published_file_holds_a_held_out_question_case_id_or_reference_text(workload_dir, tmp_path):
+def test_no_published_file_holds_a_held_out_question_case_id_reference_text_entity_id_or_answer(workload_dir, tmp_path):
     hypotrail_command()
-    needles = held_out_texts(workload_dir)
+    copy, answers = held_out_workload(workload_dir, tmp_path)
+    needles = held_out_texts(workload_dir) + answers
     found = len(needles)
-    assert found == 18
+    assert found == 26
     out = tmp_path / "a8-published"
-    done = evaluate(workload_dir, out)
+    done = evaluate(copy, out, candidate=HELD_OUT_FIXTURE)
     assert done.returncode == 0, done.stdout + done.stderr
     files = published(out)
     assert len(files) == 2
+    # The answers went through the job: every held-out pair is produced.
+    assert json.loads((out / "aggregate.json").read_text(encoding="utf-8"))["counts"] == {"units": 6, "produced": 6, "failed": 0, "missing": 0}
     holding = files_holding(needles, files)
     assert holding == 0
 
 
 def test_after_a_reading_no_file_left_in_the_kit_or_in_its_temporary_directory_holds_held_out_text(workload_dir, tmp_path, monkeypatch):
     hypotrail_command()
-    needles = held_out_texts(workload_dir)
+    copy, answers = held_out_workload(workload_dir, tmp_path)
+    needles = held_out_texts(workload_dir) + answers
     # The job runs from the root of a clone of the kit, so that every file it writes there is one `git status` lists, the published ones included.
     work = kit_clone(tmp_path)
     monkeypatch.chdir(work)
     temporary = tmp_path.parent / f"{tmp_path.name}-a8-tmp"
     temporary.mkdir()
-    done = evaluate(workload_dir, work / "a8-published", env={"TMPDIR": str(temporary)})
+    done = evaluate(copy, work / "a8-published", candidate=HELD_OUT_FIXTURE, env={"TMPDIR": str(temporary)})
     assert done.returncode == 0, done.stdout + done.stderr
-    listed = subprocess.run(["git", "status", "--porcelain", "--ignored", "--untracked-files=all"], capture_output=True, text=True, check=True).stdout.splitlines()
-    written = [Path(line[3:]) for line in listed]
+    written = kit_files()
     assert {path.parts[0] for path in written} == {"ledger", "a8-published"}
     holding = files_holding(needles, written)
     assert holding == 0
@@ -188,7 +241,7 @@ def test_a_candidate_that_is_not_a_fixture_name_is_refused_with_exit_2_even_when
     assert published(out) == []
 
 
-def test_a_reading_sent_sigterm_removes_its_temporary_directory(workload_dir, tmp_path):
+def test_a_reading_sent_sigterm_removes_its_temporary_directory_and_closes_the_reading_failed(workload_dir, tmp_path):
     hypotrail_command()
     temporary = tmp_path.parent / f"{tmp_path.name}-a8-tmp"
     temporary.mkdir()
@@ -205,3 +258,67 @@ def test_a_reading_sent_sigterm_removes_its_temporary_directory(workload_dir, tm
     process.communicate(timeout=120)
     assert list(temporary.iterdir()) == []
     assert process.returncode == 128 + signal.SIGTERM
+    assert [(record["status"], record.get("reason")) for record in read_records()] == [("failed", "interrupted")]
+
+
+def test_a_hypotrail_failure_whose_stderr_names_a_held_out_case_shows_it_in_no_output_of_the_job_and_no_file(workload_dir, tmp_path, monkeypatch):
+    case_id = held_out_cases(workload_dir)[0][0]["case_id"]
+    # Hypotrail names a Case in what it prints on stderr, as `import agent` does for a Case it does not know.
+    environment_of_job = fake_hypotrail(tmp_path, f"import sys\nsys.stderr.write({case_id!r} + ' is not a Case\\n')\nsys.exit(2)\n")
+    work = kit_clone(tmp_path)
+    monkeypatch.chdir(work)
+    temporary = tmp_path.parent / f"{tmp_path.name}-a8-tmp"
+    temporary.mkdir()
+    done = evaluate(workload_dir, work / "a8-published", env={"TMPDIR": str(temporary), **environment_of_job})
+    exit_code = done.returncode
+    assert exit_code == 1
+    shown = [name for name, text in (("stdout", done.stdout), ("stderr", done.stderr)) if case_id in text]
+    assert shown == []
+    holding = files_holding([case_id], kit_files())
+    assert holding == 0
+    assert list(temporary.iterdir()) == []
+
+
+def test_an_error_after_the_reading_is_counted_closes_it_failed_and_shows_no_held_out_case(workload_dir, tmp_path, monkeypatch, capsys):
+    case_id = held_out_cases(workload_dir)[0][0]["case_id"]
+    job(monkeypatch)
+    temporary = tmp_path.parent / f"{tmp_path.name}-a8-tmp"
+    temporary.mkdir()
+    monkeypatch.setattr(tempfile, "tempdir", str(temporary))
+
+    def failing_export(*args, **kwargs):
+        raise WorkloadError(f"an error that names {case_id}")
+
+    monkeypatch.setattr(evaluator_job, "export", failing_export)
+    out = tmp_path / "a8-published"
+    exit_code = main(["evaluate", "--workload-dir", str(workload_dir), "--candidate", "concise", "--out", str(out)])
+    printed = capsys.readouterr()
+    assert exit_code == 1
+    assert [(record["set"], record["status"], record.get("reason")) for record in read_records()] == [("public_check", "failed", "error")]
+    shown = (case_id in printed.out) + (case_id in printed.err)
+    assert shown == 0
+    assert published(out) == []
+    assert list(temporary.iterdir()) == []
+
+
+def test_a_key_error_after_the_reading_is_counted_closes_it_failed_with_no_traceback(workload_dir, tmp_path):
+    # Hypotrail's `init` prints an object without the ids the job reads.
+    done = evaluate(workload_dir, tmp_path / "a8-published", env=fake_hypotrail(tmp_path, "print('{}')\n"))
+    assert [(record["set"], record["status"], record.get("reason")) for record in read_records()] == [("public_check", "failed", "error")]
+    assert (done.returncode, "Traceback" in done.stderr) == (1, False)
+    assert published(tmp_path / "a8-published") == []
+
+
+def test_a_fixture_line_the_job_cannot_replay_is_refused_with_exit_2_without_naming_its_held_out_case(workload_dir, tmp_path, monkeypatch, capsys):
+    case_id = held_out_cases(workload_dir)[0][0]["case_id"]
+    job(monkeypatch)
+    copy = tmp_path / "a8-examples" / workload_dir.name
+    shutil.copytree(workload_dir, copy)
+    (copy / "fixtures" / "answers-a8-bad.jsonl").write_text(json.dumps({"case_id": case_id, "repeat": 0, "observation_status": "produced"}) + "\n", encoding="utf-8")
+    monkeypatch.setattr(evaluator_job, "checkout_commit", lambda directory: "b" * 40)
+    exit_code = main(["evaluate", "--workload-dir", str(copy), "--candidate", "a8-bad", "--out", str(tmp_path / "a8-published")])
+    printed = capsys.readouterr()
+    assert exit_code == 2
+    shown = (case_id in printed.out) + (case_id in printed.err)
+    assert shown == 0
+    assert read_records() == []

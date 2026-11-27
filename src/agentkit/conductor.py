@@ -65,8 +65,10 @@ def next_id() -> str:
     return f"c-{max(numbers, default=0) + 1:04d}"
 
 
-def call_hypotrail(*args: str) -> dict:
-    """Runs `hypotrail ARGS --json` as a subprocess, without Hypotrail's model key, and returns the object it prints; raises `HypotrailFailed` when it exits with an error or prints no object."""
+def call_hypotrail(*args: str, quiet: bool = False) -> dict:
+    """Runs `hypotrail ARGS --json` as a subprocess, without Hypotrail's model key, and returns the object it prints; raises `HypotrailFailed` when it exits with an error or prints no object.
+
+    The error ends with the end of Hypotrail's stderr, unless `quiet`: then it names only the command and its exit code, since Hypotrail's stderr can name a Case."""
     environment = {key: value for key, value in os.environ.items() if key != "HYPOTRAIL_ANTHROPIC_API_KEY"}
     done = subprocess.run([*hypotrail_command(), *args, "--json"], capture_output=True, text=True, env=environment)
     try:
@@ -74,6 +76,9 @@ def call_hypotrail(*args: str) -> dict:
     except json.JSONDecodeError:
         printed = None
     if not isinstance(printed, dict):
+        if quiet:
+            command = " ".join(args[:2] if args[0] == "import" else args[:1])
+            raise HypotrailFailed(f"hypotrail {command} exited {done.returncode}" + (" and printed no JSON object" if done.returncode == 0 else ""))
         raise HypotrailFailed(f"hypotrail {' '.join(args[:2])} exited {done.returncode}: {done.stderr.strip()[-500:]}")
     return printed
 
