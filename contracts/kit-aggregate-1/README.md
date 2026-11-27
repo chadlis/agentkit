@@ -16,8 +16,9 @@ JSON Schema 2020-12. The schema reserves fields for counts and aggregates and sp
 
 - A leak search over every published file finds no held-out question, answer, Reference text or entity id.
 - The job's Decision is written after the report, from a words file a person wrote before the reading. Its `source` names the outside act: a pull request cited as `https://github.com/<owner>/<repo>/pull/<n>@<40-hex merge commit>`, or `job:https://github.com/<owner>/<repo>/actions/runs/<run id>;actor=<login>`. `authenticated` stays false; the level is derived at read.
-- A second reading of the same frozen candidate is refused (exit 8); a candidate made after the first reading is refused.
+- A second reading of the same frozen Candidate or a reading beyond the committed total budget exits 8. The initial total is three ([D-220](https://github.com/chadlis/hypotrail/issues/75#issuecomment-7223332432)).
   - Note, 2026-11-27: not yet enforced across job runs. The second reading is refused within one working directory only, since a job's runner starts with an empty ledger, and the refusal of a candidate made after the first reading is not built. Both are tracked in chadlis/agentkit#25, which must land before the first real dispatch of `evaluator.yml`; the job's Decision is chadlis/agentkit#26. The kit log line for these choices is held for the owner.
+  - Update, 2026-11-27: the evaluator checks the committed reading record and publishes each spent reading's metadata separately. The required reviewer verifies the previous reading is recorded on `main` before the next dispatch. The aggregate schema and its per-Candidate reading fields stay the same.
 
 ## Examples
 

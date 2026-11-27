@@ -1,7 +1,7 @@
 name: evaluator
 
 # The held-out reading (docs/design.md, sections 1 and 3): started by a person, by hand, in the protected environment `held-out`.
-# Only the aggregate report leaves the job; the per-Case files stay on its runner.
+# Only the aggregate report and the reading metadata leave the job.
 on:
   workflow_dispatch:
     inputs:
@@ -12,8 +12,13 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: held-out-evaluator
+  cancel-in-progress: false
+
 jobs:
   held-out-reading:
+    if: ${{ github.ref == 'refs/heads/main' && github.run_attempt == '1' }}
     runs-on: ubuntu-latest
     environment: held-out
     steps:
@@ -41,5 +46,21 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: aggregate
-          path: published/
+          path: |
+            published/aggregate.json
+            published/aggregate.md
           if-no-files-found: error
+      - if: ${{ always() && hashFiles('published/reading.jsonl') != '' }}
+        run: |
+          {
+            echo "Merge this reading into readings.jsonl before the next dispatch."
+            echo
+            echo '```'
+            cat published/reading.jsonl
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+      - if: ${{ always() && hashFiles('published/reading.jsonl') != '' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: reading
+          path: published/reading.jsonl
