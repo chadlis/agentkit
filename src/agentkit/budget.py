@@ -85,8 +85,17 @@ def _amount(value) -> bool:
 
 def load(path: Path = BUDGET_FILE) -> Budget:
     try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as error:
+        content = path.read_bytes()
+    except OSError as error:
+        raise BudgetError(f"{path}: {error}") from error
+    return parse(content, path)
+
+
+def parse(content: bytes, path: Path | str) -> Budget:
+    """Validate budget bytes read from a working directory or a committed Git object."""
+    try:
+        data = json.loads(content.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
         raise BudgetError(f"{path}: {error}") from error
     if not isinstance(data, dict) or data.keys() - {TOTAL_READINGS} != set(KEYS) or not isinstance(data["reason"], str):
         raise BudgetError(f"{path}: the budget is an object of {', '.join(KEYS)} with optional {TOTAL_READINGS}")

@@ -26,7 +26,8 @@ def reservation_history(directory: Path):
     git(directory, "init", "--quiet", "--initial-branch=main")
     record = directory / "reservations.jsonl"
     record.touch()
-    git(directory, "add", record.name)
+    shutil.copyfile(ROOT / "budget.json", directory / "budget.json")
+    git(directory, "add", record.name, "budget.json")
     git(directory, "commit", "--quiet", "-m", "Start reservation history")
 
     def append(event: dict) -> str:

@@ -91,6 +91,34 @@ def test_a_stale_reservation_does_not_poison_replay_or_rejoin_after_a_return(his
         assert refusal.value.reason == "held_out_total_readings"
 
 
+def test_a_committed_budget_raise_preserves_prior_refusals_and_admits_a_new_dispatch(history):
+    directory, append = history
+    for number, name in enumerate(("first", "second", "third", "stale"), start=1):
+        append(reserve(name, number))
+    with pytest.raises(budget.BudgetRefused) as refusal:
+        authorise(directory, name="stale", number=4)
+    assert refusal.value.reason == "held_out_total_readings"
+
+    committed_budget = directory / "budget.json"
+    raised = json.loads(committed_budget.read_text(encoding="utf-8"))
+    raised["held_out_total_readings"] = 4
+    raised["reason"] = "A separate synthetic budget approval"
+    committed_budget.write_text(json.dumps(raised), encoding="utf-8")
+    Path("budget.json").write_text(json.dumps(raised), encoding="utf-8")
+    with pytest.raises(budget.BudgetRefused) as refusal:
+        authorise(directory, name="stale", number=4)
+    assert refusal.value.reason == "held_out_total_readings"
+
+    git(directory, "add", committed_budget.name)
+    git(directory, "commit", "--quiet", "-m", "Merge the budget increase")
+    append(reserve("stale", 4))
+    append(reserve("fresh", 5))
+    assert authorise(directory, name="fresh", number=5).configuration_digest == reserve("fresh", 5)["configuration_digest"]
+    with pytest.raises(budget.BudgetRefused) as refusal:
+        authorise(directory, name="stale", number=4)
+    assert refusal.value.reason == "held_out_total_readings"
+
+
 def test_a_configuration_renamed_in_a_concurrent_request_cannot_authorise_a_read(history):
     directory, append = history
     first = reserve("first", 1)
@@ -153,13 +181,47 @@ def test_a_frozen_fixture_alias_is_refused_before_accessing_its_bytes(tmp_path, 
     inspect_git = reservations._git
 
     def only_git_objects(directory, *args):
-        assert args[0] in {"rev-parse", "cat-file"}
+        assert args[0] in {"rev-parse", "cat-file", "ls-tree"}
         return inspect_git(directory, *args)
 
     monkeypatch.setattr(reservations, "_git", only_git_objects)
     with pytest.raises(budget.BudgetRefused) as refusal:
         reservations.verify_frozen_fixture(work, "alias", first, ("first",))
     assert refusal.value.reason == "held_out_readings"
+
+
+@pytest.mark.parametrize("kind", ["committed-symlink", "worktree-symlink", "worktree-hardlink"])
+def test_a_linked_fixture_never_opens_a_mutable_target(tmp_path, monkeypatch, kind):
+    repo = tmp_path / "checkout"
+    work = repo / "examples" / "workload"
+    fixture = work / "fixtures" / "answers-first.jsonl"
+    fixture.parent.mkdir(parents=True)
+    git(repo, "init", "--quiet", "--initial-branch=main")
+    target = tmp_path / "outside.jsonl"
+    target.write_text("mutable synthetic bytes\n", encoding="utf-8")
+    if kind == "committed-symlink":
+        fixture.symlink_to(target)
+    else:
+        fixture.write_bytes(target.read_bytes())
+    git(repo, "add", "examples")
+    git(repo, "commit", "--quiet", "-m", "Commit the fixture shape")
+    first = git(repo, "rev-parse", "HEAD")
+    if kind != "committed-symlink":
+        fixture.unlink()
+        if kind == "worktree-symlink":
+            fixture.symlink_to(target)
+        else:
+            fixture.hardlink_to(target)
+
+    inspect_git = reservations._git
+
+    def only_git_objects(directory, *args):
+        assert args[0] in {"rev-parse", "cat-file", "ls-tree"}
+        return inspect_git(directory, *args)
+
+    monkeypatch.setattr(reservations, "_git", only_git_objects)
+    with pytest.raises(readings.RecordError, match="regular"):
+        reservations.verify_frozen_fixture(work, "first", first)
 
 
 def simulate_github(monkeypatch, *, merge_commit, actor=7, finished="2026-11-27T16:00:00Z", status="completed",

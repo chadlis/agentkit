@@ -2,6 +2,7 @@
 
 import json
 import re
+import stat
 import subprocess
 import urllib.request
 from dataclasses import dataclass
@@ -32,12 +33,12 @@ def _git(directory: Path, *args: str) -> subprocess.CompletedProcess[bytes]:
         raise readings.RecordError("cannot read the committed reservation history") from None
 
 
-def _history(directory: Path):
+def _history(directory: Path, head: str):
     """Read only the first-parent commits of the Agentkit main checkout, never its worktree file."""
     depth = _git(directory, "rev-parse", "--is-shallow-repository")
     if depth.returncode or depth.stdout != b"false\n":
         raise readings.RecordError("the complete committed reservation history is required")
-    log = _git(directory, "log", "--first-parent", "--full-history", "--reverse", "--format=%H", "HEAD", "--", RECORD)
+    log = _git(directory, "log", "--first-parent", "--full-history", "--reverse", "--format=%H", head, "--", RECORD)
     if log.returncode or not log.stdout.strip():
         raise readings.RecordError("the complete committed reservation history is required")
     previous = b""
@@ -60,6 +61,14 @@ def _history(directory: Path):
         if not _well_formed(event):
             raise readings.RecordError("a reservation event contains invalid metadata")
         yield commit, event
+
+
+def _committed_budget(directory: Path, commit: str) -> budget.Budget:
+    location = f"{commit}:{budget.BUDGET_FILE}"
+    snapshot = _git(directory, "show", location)
+    if snapshot.returncode:
+        raise budget.BudgetError("the committed reservation budget is unavailable")
+    return budget.parse(snapshot.stdout, location)
 
 
 def _well_formed(event) -> bool:
@@ -141,13 +150,18 @@ def authorise(
         raise budget.BudgetRefused("reading_reservation", "a reservation authorises only the first dispatch attempt")
     if limits.held_out_readings != 1:
         raise budget.BudgetRefused("held_out_readings", "the budget must allow one protected reading per Candidate")
-    total_readings = limits.protected_total()
+    limits.protected_total()
+    snapshot = _git(directory, "rev-parse", "--verify", "HEAD")
+    if snapshot.returncode:
+        raise readings.RecordError("the committed reservation snapshot is unavailable")
+    head = snapshot.stdout.decode("ascii").strip()
+    total_readings = _committed_budget(directory, head).protected_total()
     admitted = {}
     refused = {}
     candidates = set()
     configurations = set()
     returned = set()
-    for commit, event in _history(directory):
+    for commit, event in _history(directory, head):
         event_run = event["job_run"]
         event_identity = RUN.fullmatch(event_run)
         if event_identity[1] != repository:
@@ -161,7 +175,14 @@ def authorise(
         if event["candidate"] in candidates or event["configuration_digest"] in configurations:
             refused[event_run] = ("held_out_readings", "this Candidate has already reserved its held-out reading")
             continue
-        if len(admitted) - len(returned) >= total_readings:
+        policy = _committed_budget(directory, commit)
+        if policy.held_out_total_readings is None:
+            refused[event_run] = ("reading_reservation", "this dispatch was reserved without an explicit committed total")
+            continue
+        if policy.held_out_readings != 1:
+            refused[event_run] = ("held_out_readings", "the committed budget did not allow one protected reading per Candidate")
+            continue
+        if len(admitted) - len(returned) >= policy.held_out_total_readings:
             refused[event_run] = (budget.TOTAL_READINGS, "the protected reading budget is spent")
             continue
         candidates.add(event["candidate"])
@@ -186,6 +207,23 @@ def authorise(
     return Permit(reservation["configuration_digest"], next(iter(admitted.values()))["hypotrail_commit"], tuple(earlier_candidates))
 
 
+def _regular_git_blob(workload_dir: Path, revision: str, path: str) -> bytes | None:
+    entry = _git(workload_dir, "ls-tree", "--full-tree", "-z", revision, "--", path)
+    if entry.returncode:
+        raise readings.RecordError("the frozen Candidate Git object is unavailable")
+    if not entry.stdout:
+        return None
+    try:
+        record, end = entry.stdout.split(b"\0")
+        description, listed_path = record.split(b"\t", 1)
+        mode, object_type, digest = description.split()
+        if end or listed_path != path.encode("utf-8"):
+            raise ValueError
+    except ValueError:
+        raise readings.RecordError("the frozen Candidate Git object is invalid") from None
+    return digest if mode in (b"100644", b"100755") and object_type == b"blob" else None
+
+
 def verify_frozen_fixture(workload_dir: Path, candidate: str, first_commit: str, earlier_candidates: tuple[str, ...] = ()) -> None:
     """Compare Git object names against the first reserved Hypotrail checkout before opening the adapter."""
     fixture = f"fixtures/answers-{candidate}.jsonl"
@@ -194,17 +232,25 @@ def verify_frozen_fixture(workload_dir: Path, candidate: str, first_commit: str,
         raise readings.RecordError("the Candidate is not in a Git checkout")
     object_prefix = prefix.stdout.decode("utf-8").rstrip("\n")
     object_path = object_prefix + fixture
-    current = _git(workload_dir, "rev-parse", "--verify", f"HEAD:{object_path}")
-    if current.returncode:
-        raise readings.RecordError("the Candidate fixture is missing from or differs from its frozen Git checkout")
+    current = _regular_git_blob(workload_dir, "HEAD", object_path)
+    if current is None:
+        raise readings.RecordError("the Candidate fixture must be a regular file in its frozen Git checkout")
     if _git(workload_dir, "cat-file", "-e", f"{first_commit}^{{commit}}").returncode:
         raise readings.RecordError("the first reserved Hypotrail checkout is unavailable")
-    original = _git(workload_dir, "rev-parse", "--verify", f"{first_commit}:{object_path}")
-    if original.returncode or original.stdout != current.stdout:
+    original = _regular_git_blob(workload_dir, first_commit, object_path)
+    if original != current:
         raise budget.BudgetRefused("made_after_first_reading", "the frozen Candidate fixture did not exist at the first reservation")
     for earlier in earlier_candidates:
-        prior = _git(workload_dir, "rev-parse", "--verify", f"{first_commit}:{object_prefix}fixtures/answers-{earlier}.jsonl")
-        if prior.returncode == 0 and prior.stdout == current.stdout:
+        prior = _regular_git_blob(workload_dir, first_commit, f"{object_prefix}fixtures/answers-{earlier}.jsonl")
+        if prior == current:
             raise budget.BudgetRefused("held_out_readings", "this fixture is identical to an earlier reserved Candidate")
+    path = workload_dir / fixture
+    try:
+        info = path.lstat()
+        folder = path.parent.lstat()
+    except OSError:
+        raise readings.RecordError("the evaluator requires a regular unlinked Candidate fixture") from None
+    if not stat.S_ISDIR(folder.st_mode) or not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
+        raise readings.RecordError("the evaluator requires a regular unlinked Candidate fixture")
     if _git(workload_dir, "diff", "--quiet", "--no-ext-diff", "HEAD", "--", fixture).returncode:
         raise readings.RecordError("the Candidate fixture is missing from or differs from its frozen Git checkout")
