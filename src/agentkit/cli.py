@@ -5,7 +5,7 @@ import os
 import sys
 from pathlib import Path
 
-from agentkit import budget, conductor, decisions, harness, ledger, markers, stops
+from agentkit import budget, conductor, decisions, evaluator_job, harness, ledger, markers, stops
 from agentkit.adapters import live
 from agentkit.adapters.scripted import ScriptedAdapter
 from agentkit.cases import WorkloadError
@@ -68,6 +68,11 @@ def build_parser() -> argparse.ArgumentParser:
     conduct.add_argument("--configurations", required=True, metavar="A,B", help="the scripted fixtures to try, in order; the first is the Control")
     conduct.add_argument("--adapter", choices=["scripted", "live"], default="scripted", help="scripted only: the conductor makes no live call, and live is refused with exit 2")
     conduct.set_defaults(handler=_conduct)
+    evaluate = commands.add_parser("evaluate", help="the evaluator job's held-out reading of one frozen Configuration; it publishes an aggregate report only, and is refused with exit 9 outside a job of evaluator.yml")
+    evaluate.add_argument("--workload-dir", required=True, type=Path, metavar="DIR", help="the Workload directory of a Hypotrail checkout (for example hypotrail/examples/chinook_prose)")
+    evaluate.add_argument("--candidate", required=True, metavar="NAME", help="the frozen Configuration to read: the scripted fixture fixtures/answers-NAME.jsonl of the Workload")
+    evaluate.add_argument("--out", required=True, type=Path, metavar="OUT", help="an empty or new directory for the published files, aggregate.json and aggregate.md")
+    evaluate.set_defaults(handler=_evaluate)
     return parser
 
 
@@ -227,6 +232,29 @@ def _conduct(args: argparse.Namespace) -> int:
     journal = conductor.conduct(args.workload_dir, args.partition, configurations)
     print(f"Conductor {journal.conduct_id}: {journal.outcome}, {journal.detail} (note in {conductor.CONDUCTOR_DIR / journal.conduct_id}-note.md)", file=sys.stdout if journal.outcome == conductor.DONE else sys.stderr)
     return CONDUCT_EXITS[journal.outcome]
+
+
+def _evaluate(args: argparse.Namespace) -> int:
+    try:
+        aggregate = evaluator_job.read(args.workload_dir, args.candidate, args.out)
+    except HeldOutRefused as error:
+        print(f"refused: {error}", file=sys.stderr)
+        return EXIT_HELD_OUT_REFUSED
+    except stops.StopOpen as error:
+        print(f"refused: {error}", file=sys.stderr)
+        return EXIT_OPEN_STOP
+    except budget.BudgetRefused as error:
+        print(f"refused by the budget ({error.reason}): {error}", file=sys.stderr)
+        return EXIT_BUDGET
+    except INVALID as error:
+        print(f"invalid input: {error}", file=sys.stderr)
+        return EXIT_INVALID_INPUT
+    except conductor.HypotrailFailed as error:
+        print(f"the reading failed and is spent; nothing is published: {error}", file=sys.stderr)
+        return EXIT_RUN_FAILED
+    reading = aggregate["reading"]
+    print(f"Held-out reading {reading['number']} of {reading['allowed']} of {args.candidate}: {aggregate['counts']['units']} pairs; published {', '.join(evaluator_job.PUBLISHED)} to {args.out}")
+    return 0
 
 
 def main(argv: list[str] | None = None) -> int:

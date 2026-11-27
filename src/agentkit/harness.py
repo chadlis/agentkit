@@ -22,6 +22,25 @@ def _without_reason(fields: dict | None) -> bool:
     return not isinstance(metadata, dict) or not isinstance(metadata.get("reason"), str) or not metadata["reason"]
 
 
+def admit(partition: str, adapter, ledger_dir: Path = ledger.LEDGER_DIR, budget_file: Path = budget.BUDGET_FILE) -> tuple[budget.Budget, dict, list[dict]]:
+    """Checks, in this order, that no stop is open and that the run of `adapter` on `partition` exceeds no limit of the budget; returns the budget, the stop rules and the ledger's records.
+
+    A refused run is recorded `refused` in `ledger_dir`, with `stop_open` or the limit as its reason, and raises `StopOpen` or `BudgetRefused`."""
+    limits = budget.load(budget_file)
+    rules = stops.load()
+    blocking = stops.open_stops()
+    if blocking:
+        ledger.refuse_run(ledger_dir, partition=partition, adapter=adapter.name, configuration=adapter.settings, reason="stop_open")
+        raise stops.StopOpen([stop["id"] for stop in blocking])
+    records = ledger.read_records(ledger_dir)
+    try:
+        budget.check_run(limits, records, partition, adapter.settings, getattr(adapter, "is_live", False))
+    except budget.BudgetRefused as refusal:
+        ledger.refuse_run(ledger_dir, partition=partition, adapter=adapter.name, configuration=adapter.settings, reason=refusal.reason)
+        raise
+    return limits, rules, records
+
+
 def run(workload_dir: Path, partition: str, adapter, ledger_dir: Path = ledger.LEDGER_DIR, budget_file: Path = budget.BUDGET_FILE, repeats: int = 1) -> str:
     """Runs `adapter` over every (Case, Repeat) of `partition` and returns the run id. An adapter that raises leaves its record `running`, for the next run to mark `failed`.
 
@@ -35,18 +54,7 @@ def run(workload_dir: Path, partition: str, adapter, ledger_dir: Path = ledger.L
     if type(repeats) is not int or repeats < 1:
         raise WorkloadError(f"repeats must be an integer of at least 1, not {repeats!r}")
     refuse_held_out(partition, adapter.name, adapter.settings, ledger_dir)
-    limits = budget.load(budget_file)
-    rules = stops.load()
-    blocking = stops.open_stops()
-    if blocking:
-        ledger.refuse_run(ledger_dir, partition=partition, adapter=adapter.name, configuration=adapter.settings, reason="stop_open")
-        raise stops.StopOpen([stop["id"] for stop in blocking])
-    records = ledger.read_records(ledger_dir)
-    try:
-        budget.check_run(limits, records, partition, adapter.settings, getattr(adapter, "is_live", False))
-    except budget.BudgetRefused as refusal:
-        ledger.refuse_run(ledger_dir, partition=partition, adapter=adapter.name, configuration=adapter.settings, reason=refusal.reason)
-        raise
+    limits, rules, records = admit(partition, adapter, ledger_dir, budget_file)
     pairs = [(case, repeat) for case in read_cases(workload_dir, partition) for repeat in range(repeats)]
     run_id = ledger.open_run(
         ledger_dir,

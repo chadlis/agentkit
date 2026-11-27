@@ -65,7 +65,8 @@ def next_id() -> str:
     return f"c-{max(numbers, default=0) + 1:04d}"
 
 
-def _hypotrail(*args: str) -> dict:
+def call_hypotrail(*args: str) -> dict:
+    """Runs `hypotrail ARGS --json` as a subprocess, without Hypotrail's model key, and returns the object it prints; raises `HypotrailFailed` when it exits with an error or prints no object."""
     environment = {key: value for key, value in os.environ.items() if key != "HYPOTRAIL_ANTHROPIC_API_KEY"}
     done = subprocess.run([*hypotrail_command(), *args, "--json"], capture_output=True, text=True, env=environment)
     try:
@@ -100,15 +101,15 @@ class Study:
         """Exports the run, has Hypotrail import and assess it, and returns the Assessment id."""
         if self.references_id is None:
             self.work = Path(tempfile.mkdtemp(prefix=f"agentkit-{self.conduct_id}-"))
-            made = _hypotrail("init", "--workload", self.workload_dir.name, "--study", str(self.path), "--examples-dir", self.examples)
+            made = call_hypotrail("init", "--workload", self.workload_dir.name, "--study", str(self.path), "--examples-dir", self.examples)
             self.references_id = made["references_id"]
         out = self.work / f"export-{configuration}"
         export(run_id, out)
-        imported = _hypotrail(
+        imported = call_hypotrail(
             "import", "agent", "--study", str(self.path), "--source", str(out / "answers.jsonl"), "--population", str(out / "population.json"),
             "--request-id", f"{self.conduct_id}-{run_id}", "--examples-dir", self.examples,
         )
-        assessed = _hypotrail(
+        assessed = call_hypotrail(
             "assess", "--study", str(self.path), "--observations", imported["observation_set_id"], "--scorer", "text_facts_v1",
             "--references", self.references_id, "--examples-dir", self.examples,
         )
@@ -116,7 +117,7 @@ class Study:
 
     def delta(self, control: str, candidate: str) -> dict:
         """The `comparison.delta` of the Control and the Candidate, which holds their dev `text_facts_success` shares."""
-        delta = _hypotrail("compare", "--study", str(self.path), "--control", control, "--candidate", candidate, "--examples-dir", self.examples)["comparison"]["delta"]
+        delta = call_hypotrail("compare", "--study", str(self.path), "--control", control, "--candidate", candidate, "--examples-dir", self.examples)["comparison"]["delta"]
         shares = (delta.get("control"), delta.get("candidate"))
         if not all(isinstance(share, (int, float)) and not isinstance(share, bool) for share in shares):
             raise HypotrailFailed(f"hypotrail compare gave no two shares to compare ({delta.get('reason')})")
