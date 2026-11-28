@@ -124,6 +124,7 @@
             "enum": [
               "pr",
               "relayed",
+              "human_unverified",
               "none"
             ]
           },
@@ -132,6 +133,16 @@
           },
           "option": {
             "type": "string"
+          }
+        },
+        "if": {
+          "properties": {
+            "level": { "const": "human_unverified" }
+          }
+        },
+        "then": {
+          "properties": {
+            "mark": { "const": "HUMAN" }
           }
         }
       }
