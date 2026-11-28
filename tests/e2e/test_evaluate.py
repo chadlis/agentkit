@@ -12,15 +12,18 @@ import subprocess
 import sys
 import tempfile
 import time
+from contextlib import contextmanager
 from pathlib import Path
 
 import jsonschema
 import pytest
 
-from agentkit import conductor, decisions, evaluator_job
+from agentkit import conductor, decisions, evaluator_job, readings
+from agentkit.adapters.scripted import ScriptedAdapter
 from agentkit.cases import WorkloadError
 from agentkit.cli import main
 from agentkit.ledger import read_records
+from conftest import git, reservation_history
 from test_conduct import files_holding
 from test_dev_end_to_end import ROOT, agentkit_command, hypotrail_command, kit_clone
 
@@ -35,6 +38,7 @@ JOB = {
     "GITHUB_REPOSITORY": "chadlis/agentkit",
     "GITHUB_SERVER_URL": "https://github.com",
     "GITHUB_RUN_ID": "123",
+    "GITHUB_RUN_ATTEMPT": "1",
     "GITHUB_ACTOR": "a-person",
 }
 
@@ -43,13 +47,38 @@ def environment(extra: dict | None = None) -> dict:
     return {key: value for key, value in os.environ.items() if key != "HYPOTRAIL_ANTHROPIC_API_KEY"} | JOB | (extra or {})
 
 
-def evaluate_command(workload_dir: Path, out: Path, candidate: str) -> list[str]:
-    return [*agentkit_command(), "evaluate", "--workload-dir", str(workload_dir), "--candidate", candidate, "--out", str(out)]
+@contextmanager
+def evaluate_arguments(workload_dir: Path, out: Path, candidate: str):
+    with tempfile.TemporaryDirectory(prefix="agentkit-test-reservation-") as scratch:
+        checkout = Path(scratch) / "budget-checkout"
+        append = reservation_history(checkout)
+        fixture = workload_dir / "fixtures" / f"answers-{candidate}.jsonl"
+        if conductor.CONFIGURATION.fullmatch(candidate):
+            try:
+                settings = ScriptedAdapter(fixture).settings
+            except WorkloadError:
+                # The actual evaluator still checks the invalid fixture and its output boundary.
+                settings = None
+            append({
+                "kind": "reserve", "candidate": candidate, "configuration_digest": readings.digest(settings),
+                "job_commit": JOB_SHA, "hypotrail_commit": evaluator_job.checkout_commit(workload_dir),
+                "job_run": "https://github.com/chadlis/agentkit/actions/runs/123",
+            })
+        yield [
+            "evaluate", "--workload-dir", str(workload_dir), "--candidate", candidate, "--out", str(out),
+            "--reservations-checkout", str(checkout),
+        ]
 
 
 def evaluate(workload_dir: Path, out: Path, candidate: str = "concise", env: dict | None = None) -> subprocess.CompletedProcess:
     """`agentkit evaluate` in its own process, in the working directory of the test, as a job of `evaluator.yml` would run it."""
-    return subprocess.run(evaluate_command(workload_dir, out, candidate), env=environment(env), capture_output=True, text=True, timeout=600)
+    with evaluate_arguments(workload_dir, out, candidate) as arguments:
+        return subprocess.run([*agentkit_command(), *arguments], env=environment(env), capture_output=True, text=True, timeout=600)
+
+
+def evaluate_in_process(workload_dir: Path, out: Path, candidate: str = "concise") -> int:
+    with evaluate_arguments(workload_dir, out, candidate) as arguments:
+        return main(arguments)
 
 
 def json_lines(path: Path) -> list[dict]:
@@ -122,7 +151,7 @@ def test_a_reading_in_an_imitated_evaluator_job_publishes_an_aggregate_report_th
     out = tmp_path / "a8-published"
     done = evaluate(workload_dir, out)
     assert done.returncode == 0, done.stdout + done.stderr
-    assert [path.name for path in published(out)] == ["aggregate.json", "aggregate.md"]
+    assert [path.name for path in published(out)] == ["aggregate.json", "aggregate.md", "reading.jsonl"]
     aggregate = json.loads((out / "aggregate.json").read_text(encoding="utf-8"))
     errors = [error.message for error in jsonschema.Draft202012Validator(json.loads(SCHEMA.read_text(encoding="utf-8"))).iter_errors(aggregate)]
     assert errors == []
@@ -153,7 +182,7 @@ def test_no_published_file_holds_a_held_out_question_case_id_reference_text_enti
     done = evaluate(copy, out, candidate=HELD_OUT_FIXTURE)
     assert done.returncode == 0, done.stdout + done.stderr
     files = published(out)
-    assert len(files) == 2
+    assert len(files) == 3
     # The answers went through the job: every held-out pair is produced.
     assert json.loads((out / "aggregate.json").read_text(encoding="utf-8"))["counts"] == {"units": 6, "produced": 6, "failed": 0, "missing": 0}
     holding = files_holding(needles, files)
@@ -193,16 +222,16 @@ def job(monkeypatch, extra: dict | None = None) -> None:
         monkeypatch.setenv(name, value)
 
 
-def test_a_reading_whose_hypotrail_fails_exits_1_spends_the_reading_publishes_nothing_and_removes_its_temporary_directory(workload_dir, tmp_path, monkeypatch):
+def test_a_reading_whose_hypotrail_fails_exits_1_spends_the_reading_publishes_its_record_and_removes_its_temporary_directory(workload_dir, tmp_path, monkeypatch):
     job(monkeypatch)
     temporary = tmp_path.parent / f"{tmp_path.name}-a8-tmp"
     temporary.mkdir()
     monkeypatch.setattr(tempfile, "tempdir", str(temporary))
     monkeypatch.setattr(conductor, "hypotrail_command", lambda: [sys.executable, "-c", "import sys; sys.exit(1)"])
     out = tmp_path / "a8-published"
-    assert main(["evaluate", "--workload-dir", str(workload_dir), "--candidate", "concise", "--out", str(out)]) == 1
+    assert evaluate_in_process(workload_dir, out) == 1
     assert [(record["set"], record["status"], record.get("reason")) for record in read_records()] == [("public_check", "failed", "hypotrail")]
-    assert published(out) == []
+    assert [path.name for path in published(out)] == ["reading.jsonl"]
     assert list(temporary.iterdir()) == []
 
 
@@ -222,7 +251,7 @@ def test_a_reading_the_job_cannot_report_is_refused_with_exit_2_before_it_spends
         (out / "left-over.txt").write_text("a file the job did not write\n", encoding="utf-8")
     if change == "no-sha":
         monkeypatch.delenv("GITHUB_SHA")
-    assert main(["evaluate", "--workload-dir", str(workload_dir), "--candidate", candidate, "--out", str(out)]) == 2
+    assert evaluate_in_process(workload_dir, out, candidate) == 2
     assert read_records() == []
     assert [path.name for path in published(out)] == (["left-over.txt"] if change == "out-not-empty" else [])
 
@@ -236,7 +265,7 @@ def test_a_candidate_that_is_not_a_fixture_name_is_refused_with_exit_2_even_when
     shutil.copyfile(workload_dir / "fixtures" / "answers-concise.jsonl", copy / "fixtures" / f"answers-{candidate}.jsonl")
     monkeypatch.setattr(evaluator_job, "checkout_commit", lambda directory: "b" * 40)
     out = tmp_path / "a8-published"
-    assert main(["evaluate", "--workload-dir", str(copy), "--candidate", candidate, "--out", str(out)]) == 2
+    assert evaluate_in_process(copy, out, candidate) == 2
     assert read_records() == []
     assert published(out) == []
 
@@ -245,20 +274,22 @@ def test_a_reading_sent_sigterm_removes_its_temporary_directory_and_closes_the_r
     hypotrail_command()
     temporary = tmp_path.parent / f"{tmp_path.name}-a8-tmp"
     temporary.mkdir()
-    process = subprocess.Popen(
-        evaluate_command(workload_dir, tmp_path / "a8-published", "concise"), env=environment({"TMPDIR": str(temporary)}),
-        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
-    )
-    deadline = time.monotonic() + 120
-    # Mid-reading: once `hypotrail init` has copied the References into the temporary Study.
-    while not list(temporary.glob("agentkit-evaluator-*/study/artifacts/*")) and process.poll() is None and time.monotonic() < deadline:
-        time.sleep(0.02)
-    assert process.poll() is None, "the reading ended before the temporary Study was made"
-    process.send_signal(signal.SIGTERM)
-    process.communicate(timeout=120)
+    with evaluate_arguments(workload_dir, tmp_path / "a8-published", "concise") as arguments:
+        process = subprocess.Popen(
+            [*agentkit_command(), *arguments], env=environment({"TMPDIR": str(temporary)}),
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+        )
+        deadline = time.monotonic() + 120
+        # Mid-reading: once `hypotrail init` has copied the References into the temporary Study.
+        while not list(temporary.glob("agentkit-evaluator-*/study/artifacts/*")) and process.poll() is None and time.monotonic() < deadline:
+            time.sleep(0.02)
+        assert process.poll() is None, "the reading ended before the temporary Study was made"
+        process.send_signal(signal.SIGTERM)
+        process.communicate(timeout=120)
     assert list(temporary.iterdir()) == []
     assert process.returncode == 128 + signal.SIGTERM
     assert [(record["status"], record.get("reason")) for record in read_records()] == [("failed", "interrupted")]
+    assert [path.name for path in published(tmp_path / "a8-published")] == ["reading.jsonl"]
 
 
 def hypotrail_failing_at(tmp_path: Path, failing: str, stderr: str, assessment: dict | None = None) -> dict:
@@ -314,13 +345,13 @@ def test_an_error_after_the_reading_is_counted_closes_it_failed_and_shows_no_hel
 
     monkeypatch.setattr(evaluator_job, "export", failing_export)
     out = tmp_path / "a8-published"
-    exit_code = main(["evaluate", "--workload-dir", str(workload_dir), "--candidate", "concise", "--out", str(out)])
+    exit_code = evaluate_in_process(workload_dir, out)
     printed = capsys.readouterr()
     assert exit_code == 1
     assert [(record["set"], record["status"], record.get("reason")) for record in read_records()] == [("public_check", "failed", "error")]
     shown = (case_id in printed.out) + (case_id in printed.err)
     assert shown == 0
-    assert published(out) == []
+    assert [path.name for path in published(out)] == ["reading.jsonl"]
     assert list(temporary.iterdir()) == []
 
 
@@ -329,7 +360,7 @@ def test_a_key_error_after_the_reading_is_counted_closes_it_failed_with_no_trace
     done = evaluate(workload_dir, tmp_path / "a8-published", env=fake_hypotrail(tmp_path, "print('{}')\n"))
     assert [(record["set"], record["status"], record.get("reason")) for record in read_records()] == [("public_check", "failed", "error")]
     assert (done.returncode, "Traceback" in done.stderr) == (1, False)
-    assert published(tmp_path / "a8-published") == []
+    assert [path.name for path in published(tmp_path / "a8-published")] == ["reading.jsonl"]
 
 
 def test_a_fixture_line_the_job_cannot_replay_is_refused_with_exit_2_without_naming_its_held_out_case(workload_dir, tmp_path, monkeypatch, capsys):
@@ -338,8 +369,10 @@ def test_a_fixture_line_the_job_cannot_replay_is_refused_with_exit_2_without_nam
     copy = tmp_path / "a8-examples" / workload_dir.name
     shutil.copytree(workload_dir, copy)
     (copy / "fixtures" / "answers-a8-bad.jsonl").write_text(json.dumps({"case_id": case_id, "repeat": 0, "observation_status": "produced"}) + "\n", encoding="utf-8")
-    monkeypatch.setattr(evaluator_job, "checkout_commit", lambda directory: "b" * 40)
-    exit_code = main(["evaluate", "--workload-dir", str(copy), "--candidate", "a8-bad", "--out", str(tmp_path / "a8-published")])
+    git(copy.parent, "init", "--quiet")
+    git(copy.parent, "add", "--all")
+    git(copy.parent, "commit", "--quiet", "-m", "Freeze the synthetic malformed fixture")
+    exit_code = evaluate_in_process(copy, tmp_path / "a8-published", "a8-bad")
     printed = capsys.readouterr()
     assert exit_code == 2
     shown = (case_id in printed.out) + (case_id in printed.err)

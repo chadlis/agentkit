@@ -1,7 +1,8 @@
 {
-  "reason": "First limits (chadlis/agentkit#5). Live spending is off: the live ceiling is 0 and no model has a price, so every live run is refused until a pull request raises them with its reason.",
+  "reason": "First limits (chadlis/agentkit#5). The owner fixed the held-out budget before the first reading (https://github.com/chadlis/hypotrail/issues/75#issuecomment-7223332432, D-220). Live spending is off: the live ceiling is 0 and no model has a price, so every live run is refused until a pull request raises them with its reason.",
   "dev_runs": 50,
   "held_out_readings": 1,
+  "held_out_total_readings": 3,
   "live": {"calls": 0, "tokens": 0, "usd": 0},
   "prices": {}
 }

@@ -1,7 +1,9 @@
 """Fixtures that locate the public twin in a Hypotrail checkout. The kit copies none of its files (`docs/design.md`)."""
 
+import json
 import os
 import shutil
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -9,6 +11,33 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 # Resolved once, when pytest loads this file, against the directory pytest starts in: every test then runs in its own `tmp_path`.
 CHECKOUT = Path(os.environ.get("HYPOTRAIL_CHECKOUT", ROOT / "hypotrail")).resolve()
+
+
+def git(directory: Path, *args: str) -> str:
+    return subprocess.run(
+        ["git", "-C", str(directory), "-c", "user.name=Synthetic test", "-c", "user.email=test@example.invalid", *args],
+        check=True, capture_output=True, text=True,
+    ).stdout.strip()
+
+
+def reservation_history(directory: Path):
+    """Represent merged GitHub metadata with an isolated local Git repository."""
+    directory.mkdir()
+    git(directory, "init", "--quiet", "--initial-branch=main")
+    record = directory / "reservations.jsonl"
+    record.touch()
+    shutil.copyfile(ROOT / "budget.json", directory / "budget.json")
+    git(directory, "add", record.name, "budget.json")
+    git(directory, "commit", "--quiet", "-m", "Start reservation history")
+
+    def append(event: dict) -> str:
+        with record.open("a", encoding="utf-8") as file:
+            file.write(json.dumps(event) + "\n")
+        git(directory, "add", record.name)
+        git(directory, "commit", "--quiet", "-m", "Merge a reservation event")
+        return git(directory, "rev-parse", "HEAD")
+
+    return append
 
 
 def hypotrail_checkout() -> Path:

@@ -57,12 +57,12 @@ def fail_stale_runs(records: list[dict]) -> None:
             record["end_time"] = now()
 
 
-def open_run(ledger_dir: Path, *, partition: str, adapter: str, configuration: dict | None, pairs: list[tuple[str, int]]) -> str:
+def open_run(ledger_dir: Path, *, partition: str, adapter: str, configuration: dict | None, pairs: list[tuple[str, int]], candidate: str | None = None, job_run: str | None = None) -> str:
     """Marks every record still `running` as `failed`, then appends a `running` record for the new run; returns its run id."""
     records = read_records(ledger_dir)
     fail_stale_runs(records)
     run_id = f"r-{len(records) + 1:04d}"
-    records.append({
+    record = {
         "run_id": run_id,
         "set": partition,
         "adapter": adapter,
@@ -71,7 +71,10 @@ def open_run(ledger_dir: Path, *, partition: str, adapter: str, configuration: d
         "start_time": now(),
         "status": "running",
         "end_time": None,
-    })
+    }
+    if candidate is not None and job_run is not None:
+        record.update(candidate=candidate, job_run=job_run)
+    records.append(record)
     write_records(ledger_dir, records)
     return run_id
 

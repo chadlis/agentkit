@@ -6,7 +6,7 @@ import os
 import sys
 from pathlib import Path
 
-from agentkit import budget, conductor, decisions, evaluator_job, harness, ledger, markers, stops
+from agentkit import budget, conductor, decisions, evaluator_job, harness, ledger, markers, readings, stops
 from agentkit.adapters import live
 from agentkit.adapters.scripted import ScriptedAdapter
 from agentkit.cases import DEV, WorkloadError
@@ -21,7 +21,7 @@ EXIT_BUDGET = 8
 EXIT_HELD_OUT_REFUSED = 9
 RUN_OPTIONS = ("workload_dir", "partition", "adapter")
 ADAPTER_OPTIONS = ("fixture", "model", "repeats")
-INVALID = (WorkloadError, ledger.LedgerError, budget.BudgetError, stops.StopsError, decisions.DecisionError, markers.MarkerError)
+INVALID = (WorkloadError, ledger.LedgerError, budget.BudgetError, stops.StopsError, decisions.DecisionError, markers.MarkerError, readings.RecordError)
 
 
 def add_run_options(parser: argparse.ArgumentParser, required: bool) -> None:
@@ -77,7 +77,13 @@ def build_parser() -> argparse.ArgumentParser:
     evaluate.add_argument("--workload-dir", required=True, type=Path, metavar="DIR", help="the Workload directory of a Hypotrail checkout (for example hypotrail/examples/chinook_prose)")
     evaluate.add_argument("--candidate", required=True, metavar="NAME", help="the frozen Configuration to read: the scripted fixture fixtures/answers-NAME.jsonl of the Workload")
     evaluate.add_argument("--out", required=True, type=Path, metavar="OUT", help="an empty or new directory for the published files, aggregate.json and aggregate.md")
+    evaluate.add_argument("--reservations-checkout", type=Path, metavar="DIR", help="the current Agentkit main checkout used to verify the job's reservation")
     evaluate.set_defaults(handler=_evaluate)
+    verify = commands.add_parser("verify-reservation", help="the evaluator workflow checks its reservation before retrieving the Workload")
+    verify.add_argument("--candidate", required=True, metavar="NAME", help="the Candidate named by the reservation")
+    verify.add_argument("--hypotrail-commit", required=True, metavar="SHA", help="the pinned Hypotrail commit")
+    verify.add_argument("--reservations-checkout", required=True, type=Path, metavar="DIR", help="the current Agentkit main checkout")
+    verify.set_defaults(handler=_verify_reservation)
     return parser
 
 
@@ -262,9 +268,24 @@ def _conduct(args: argparse.Namespace) -> int:
     return CONDUCT_EXITS[journal.outcome]
 
 
+def _verify_reservation(args: argparse.Namespace) -> int:
+    try:
+        evaluator_job.verify_reservation(args.candidate, args.hypotrail_commit, args.reservations_checkout)
+    except HeldOutRefused as error:
+        print(f"refused: {error}", file=sys.stderr)
+        return EXIT_HELD_OUT_REFUSED
+    except budget.BudgetRefused as error:
+        print(f"refused by the budget ({error.reason}): {error}", file=sys.stderr)
+        return EXIT_BUDGET
+    except INVALID as error:
+        print(f"invalid input: {error}", file=sys.stderr)
+        return EXIT_INVALID_INPUT
+    return 0
+
+
 def _evaluate(args: argparse.Namespace) -> int:
     try:
-        aggregate = evaluator_job.read(args.workload_dir, args.candidate, args.out)
+        aggregate = evaluator_job.read(args.workload_dir, args.candidate, args.out, args.reservations_checkout)
     except HeldOutRefused as error:
         print(f"refused: {error}", file=sys.stderr)
         return EXIT_HELD_OUT_REFUSED
@@ -278,10 +299,10 @@ def _evaluate(args: argparse.Namespace) -> int:
         print(f"invalid input: {error}", file=sys.stderr)
         return EXIT_INVALID_INPUT
     except (conductor.HypotrailFailed, evaluator_job.ReadingFailed) as error:
-        print(f"the reading failed and is spent; nothing is published: {error}", file=sys.stderr)
+        print(f"the reading failed and is spent. Its record is {args.out / readings.LINE_FILE}: {error}", file=sys.stderr)
         return EXIT_RUN_FAILED
     reading = aggregate["reading"]
-    print(f"Held-out reading {reading['number']} of {reading['allowed']} of {args.candidate}: {aggregate['counts']['units']} pairs; published {', '.join(evaluator_job.PUBLISHED)} to {args.out}")
+    print(f"Held-out reading {reading['number']} of {reading['allowed']} of {args.candidate}: {aggregate['counts']['units']} pairs. Published {', '.join((*evaluator_job.PUBLISHED, readings.LINE_FILE))} to {args.out}")
     return 0
 
 

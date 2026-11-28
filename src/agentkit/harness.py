@@ -22,17 +22,22 @@ def _without_reason(fields: dict | None) -> bool:
     return not isinstance(metadata, dict) or not isinstance(metadata.get("reason"), str) or not metadata["reason"]
 
 
-def admit(partition: str, adapter, ledger_dir: Path = ledger.LEDGER_DIR, budget_file: Path = budget.BUDGET_FILE) -> tuple[budget.Budget, dict, list[dict]]:
-    """Checks, in this order, that no stop is open and that the run of `adapter` on `partition` exceeds no limit of the budget; returns the budget, the stop rules and the ledger's records.
-
-    A refused run is recorded `refused` in `ledger_dir`, with `stop_open` or the limit as its reason, and raises `StopOpen` or `BudgetRefused`."""
+def prepare_run(partition: str, adapter: str, configuration: dict | None, ledger_dir: Path = ledger.LEDGER_DIR, budget_file: Path = budget.BUDGET_FILE) -> tuple[budget.Budget, dict, list[dict]]:
+    """Read the budget, stop rules and ledger. Record a refusal if a stop is open."""
     limits = budget.load(budget_file)
     rules = stops.load()
     blocking = stops.open_stops()
     if blocking:
-        ledger.refuse_run(ledger_dir, partition=partition, adapter=adapter.name, configuration=adapter.settings, reason="stop_open")
+        ledger.refuse_run(ledger_dir, partition=partition, adapter=adapter, configuration=configuration, reason="stop_open")
         raise stops.StopOpen([stop["id"] for stop in blocking])
-    records = ledger.read_records(ledger_dir)
+    return limits, rules, ledger.read_records(ledger_dir)
+
+
+def admit(partition: str, adapter, ledger_dir: Path = ledger.LEDGER_DIR, budget_file: Path = budget.BUDGET_FILE) -> tuple[budget.Budget, dict, list[dict]]:
+    """Checks, in this order, that no stop is open and that the run of `adapter` on `partition` exceeds no limit of the budget; returns the budget, the stop rules and the ledger's records.
+
+    A refused run is recorded `refused` in `ledger_dir`, with `stop_open` or the limit as its reason, and raises `StopOpen` or `BudgetRefused`."""
+    limits, rules, records = prepare_run(partition, adapter.name, adapter.settings, ledger_dir, budget_file)
     try:
         budget.check_run(limits, records, partition, adapter.settings, getattr(adapter, "is_live", False))
     except budget.BudgetRefused as refusal:
