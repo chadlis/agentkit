@@ -19,3 +19,7 @@ jobs:
       - run: uv sync --locked
       # Offline: no secret is passed, so no live model call can run here (AGENTS.md).
       - run: uv run --locked pytest
+      # Only the reviewed public relay source is checked online.
+      - run: uv run --locked pytest -q tests/test_relayed_sources.py
+        env:
+          AGENTKIT_VERIFY_RELAYED_SOURCES: "1"

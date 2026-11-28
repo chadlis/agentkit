@@ -1,6 +1,6 @@
 """The decision log, `decisions/log.jsonl` of the working directory, in the form `kit-decision/1`, and its citation `kit-citation/1` (`contracts/kit-decision-1/`).
 
-The writing process is named by `AGENTKIT_PROCESS`: unset or `cli` for the `agentkit` command, `conductor` or `evaluator` once `enter_process` has marked a process. Child processes inherit the mark, and `enter_process` refuses to change it. It is a guard against an accidental `HUMAN` write, not a wall: a child can reset the variable, and an unmarked shell counts as `cli`.
+The writing process is named by `AGENTKIT_PROCESS`: unset or `cli` for the `agentkit` command, `conductor` or `evaluator` once `enter_process` has marked a process. Child processes inherit the mark, and `enter_process` refuses to change it. The mark guards against accidental `HUMAN` and `RELAYED` writes. A child can reset the variable, and an unmarked shell counts as `cli`.
 
 A line's level is derived from its mark and source when it is read, never stored. `pr` means the pull request is cited in its form, checked offline; nothing verifies it with the forge."""
 
@@ -10,6 +10,7 @@ import re
 import subprocess
 from datetime import UTC, datetime
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from agentkit import ledger, markers
 
@@ -22,6 +23,8 @@ PROCESSES = ("cli", "conductor", "evaluator")
 RULE = re.compile(r"[a-z0-9_-]+@[0-9]+")
 PULL_REQUEST = re.compile(r"https://github\.com/[^/]+/[^/]+/pull/[0-9]+@[0-9a-f]{40}")
 ID = re.compile(r"K-[0-9]{4,}")
+OWNER_MARKS = ("HUMAN", "RELAYED")
+RELAY_RULE = "owner-relayed@1"
 
 
 class DecisionError(ValueError):
@@ -59,7 +62,9 @@ def lines(log: Path = LOG) -> list[dict]:
 
 
 def level(line: dict) -> str:
-    """`pr` for a `HUMAN` line whose `source.pull_request` has the form `https://github.com/<owner>/<repo>/pull/<n>@<40-hex commit>`, `relayed` for any other `HUMAN` line, `none` for a `PROXY` line. The form is checked offline: nothing asks the forge whether the pull request exists or holds that commit."""
+    """`pr` for a `HUMAN` line with a well-formed pull request citation, `relayed` for other `HUMAN` lines and `RELAYED`, `none` for `PROXY`."""
+    if line["mark"] == "RELAYED":
+        return "relayed"
     if line["mark"] != "HUMAN":
         return "none"
     cited = line["source"].get("pull_request")
@@ -91,12 +96,31 @@ def _words(words_file: Path | None) -> str:
     return words
 
 
-def append(*, question: str, option: str, mark: str, source: dict, by: str, rule: str | None = None, words_file: Path | None = None, log: Path = LOG) -> dict:
-    """Appends one line to the log and returns it. `HUMAN` is refused unless `by` is `cli`, this process is unmarked, and no conductor marker names a live process."""
+def _https_source(value: str) -> bool:
+    if not value.startswith("https://") or "\\" in value:
+        return False
+    if any(character.isspace() or ord(character) < 32 or ord(character) == 127 for character in value):
+        return False
+    try:
+        url = urlsplit(value)
+        port = url.port
+    except ValueError:
+        return False
+    return bool(url.hostname and url.username is None and url.password is None and (port is None or port > 0))
+
+
+def append(
+    *, question: str, option: str, mark: str, source: dict, by: str,
+    rule: str | None = None, words_file: Path | None = None, log: Path = LOG,
+    words: str | None = None, source_url: str | None = None, relayed_by: str | None = None,
+) -> dict:
+    """Append and return a decision. Both owner marks require an unmarked CLI and no live conductor marker."""
     if not question.strip() or not option.strip():
         raise DecisionError("DECISION_EMPTY", "a decision names its question and the option kept")
     if by not in PROCESSES:
         raise DecisionError("PROCESS_UNKNOWN", f"{by} names no writer of the log: {', '.join(PROCESSES)}")
+    if mark != "RELAYED" and any(value is not None for value in (words, source_url, relayed_by)):
+        raise DecisionError("RELAY_OPTIONS_REFUSED", "--words, --source and --relayed-by belong to RELAYED decisions")
     if mark == "PROXY":
         if rule is None:
             raise DecisionError("PROXY_WITHOUT_RULE", "a PROXY decision names its rule: --rule NAME@VERSION")
@@ -104,22 +128,36 @@ def append(*, question: str, option: str, mark: str, source: dict, by: str, rule
             raise DecisionError("PROXY_WITH_WORDS", "a PROXY decision holds a rule, not a person's words")
         if RULE.fullmatch(rule) is None:
             raise DecisionError("RULE_FORM", f"{rule} is not NAME@VERSION (lower case, digits, - and _)")
-    elif mark == "HUMAN":
+    elif mark in OWNER_MARKS:
         writer = by if by != "cli" else process()
         if writer != "cli":
-            raise DecisionError("HUMAN_REFUSED", f"the {writer}'s process cannot write HUMAN")
+            raise DecisionError(f"{mark}_REFUSED", f"the {writer}'s process cannot write {mark}")
         try:
             running, _ = markers.read()
         except markers.MarkerError as error:
-            raise DecisionError("CONDUCTOR_MARKER_UNREADABLE", f"a conductor marker cannot be read, so HUMAN is refused: {error}") from None
+            raise DecisionError("CONDUCTOR_MARKER_UNREADABLE", f"a conductor marker cannot be read, so {mark} is refused: {error}") from None
         if running:
-            raise DecisionError("CONDUCTOR_RUNNING", f"a conductor's loop is running ({', '.join(map(str, running))}): HUMAN is refused while it runs")
-        if rule is not None:
+            raise DecisionError("CONDUCTOR_RUNNING", f"a conductor's loop is running ({', '.join(map(str, running))}): {mark} is refused while it runs")
+        if mark == "HUMAN" and rule is not None:
             raise DecisionError("HUMAN_WITH_RULE", "a HUMAN decision holds the person's words, not a rule")
     else:
-        raise DecisionError("MARK_UNKNOWN", f"{mark} is neither HUMAN nor PROXY")
-    source = _source(source)
-    held = {"rule": rule} if mark == "PROXY" else {"words": _words(words_file)}
+        raise DecisionError("MARK_UNKNOWN", f"{mark} is outside the decision marks HUMAN, RELAYED and PROXY")
+    if mark == "RELAYED":
+        if rule is not None or words_file is not None or any(value is not None for value in source.values()):
+            raise DecisionError("RELAYED_WITH_LEGACY_OPTIONS", "a relayed decision uses --words, --source and --relayed-by with a fixed rule")
+        if words is None or not words.strip():
+            raise DecisionError("RELAYED_WITHOUT_WORDS", "a relayed decision needs the owner's verbatim words")
+        if source_url is None or not source_url.strip():
+            raise DecisionError("RELAYED_WITHOUT_SOURCE", "a relayed decision needs the URL of the owner's message")
+        if not _https_source(source_url):
+            raise DecisionError("RELAYED_SOURCE_FORM", "a relayed decision needs an absolute HTTPS source URL without credentials")
+        if relayed_by is None or not relayed_by.strip():
+            raise DecisionError("RELAYED_WITHOUT_RELAY", "a relayed decision names the agent that copied the words")
+        record_source = source_url
+        held = {"words": words, "relayed_by": relayed_by, "rule": RELAY_RULE}
+    else:
+        record_source = _source(source)
+        held = {"rule": rule} if mark == "PROXY" else {"words": _words(words_file)}
     number = max((int(line["id"][2:]) for line in lines(log)), default=0) + 1
     line = {
         "schema_version": SCHEMA_VERSION,
@@ -129,7 +167,7 @@ def append(*, question: str, option: str, mark: str, source: dict, by: str, rule
         "option": option,
         "mark": mark,
         **held,
-        "source": source,
+        "source": record_source,
         "by": by,
     }
     log.parent.mkdir(parents=True, exist_ok=True)
@@ -142,6 +180,13 @@ def _git(*args: str) -> subprocess.CompletedProcess:
     return subprocess.run(["git", *args], capture_output=True, text=True)
 
 
+def kit_commit() -> str:
+    """The checked-out commit, or an empty string outside a Git checkout."""
+    head = _git("rev-parse", "HEAD")
+    commit = head.stdout.strip()
+    return commit if head.returncode == 0 and re.fullmatch(r"[0-9a-f]{40}", commit) is not None else ""
+
+
 def cite(decision_id: str, log: Path = LOG) -> str:
     """The `kit-citation/1` line of a decision, at the commit checked out in the working directory, which must hold that line as it is now."""
     if ID.fullmatch(decision_id) is None:
@@ -150,9 +195,8 @@ def cite(decision_id: str, log: Path = LOG) -> str:
     if not found:
         raise DecisionError("DECISION_UNKNOWN", f"{decision_id} is not in {log}")
     [line] = found
-    head = _git("rev-parse", "HEAD")
-    commit = head.stdout.strip()
-    if head.returncode != 0 or re.fullmatch(r"[0-9a-f]{40}", commit) is None:
+    commit = kit_commit()
+    if not commit:
         raise DecisionError("KIT_COMMIT_UNKNOWN", "the working directory has no commit checked out: a citation names the kit commit")
     shown = _git("show", f"{commit}:{log.as_posix()}")
     at_commit = [json.loads(text) for text in shown.stdout.splitlines() if text.strip()] if shown.returncode == 0 else []
