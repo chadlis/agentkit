@@ -12,4 +12,4 @@ The contracts this repository owns, under `contracts/` (all but `agent-answers-1
 | 2026-11-27 | `kit-aggregate/1` | 1 | Document the candidate field and the evaluator's publication boundary | chadlis/agentkit#29 |
 | 2026-11-27 | `kit-status/1` | 1 | Document the status object inside the C6 JSON response envelope | chadlis/agentkit#29 |
 | 2026-11-27 | `kit-aggregate/1` | 1 | Document the per-Candidate and total reading limits, durable reservations and owner-only returns | Replacement for chadlis/agentkit#27 (D-220 and D-234) |
-| 2026-11-28 | `kit-citation/1`, `kit-status/1` | 1 | Accept `human_unverified` for `HUMAN` evidence and preserve existing accepted citations and status responses. [Owner decision, round 5](https://github.com/chadlis/hypotrail/issues/75#issuecomment-7235501369) | PENDING_PR |
+| 2026-11-28 | `kit-citation/1`, `kit-status/1` | 1 | Accept `human_unverified` for `HUMAN` evidence and preserve existing accepted citations and status responses. [Owner decision, round 5](https://github.com/chadlis/hypotrail/issues/75#issuecomment-7235501369) | chadlis/agentkit#40 |
