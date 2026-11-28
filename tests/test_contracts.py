@@ -74,6 +74,25 @@ def test_the_citation_examples_are_accepted_name_a_line_of_the_log_with_its_mark
         assert list(citation.iter_errors(text)), text
 
 
+@pytest.mark.parametrize(("mark", "level", "accepted"), [
+    ("HUMAN", "human_unverified", True),
+    ("HUMAN", "relayed", True),
+    ("HUMAN", "pr", True),
+    ("RELAYED", "relayed", True),
+    ("PROXY", "none", True),
+    ("RELAYED", "human_unverified", False),
+    ("PROXY", "human_unverified", False),
+])
+def test_the_citation_and_status_schemas_accept_the_new_human_level_and_existing_levels(mark, level, accepted):
+    citation = f"kit:chadlis/mlkit@{'0' * 40}:decisions/log.jsonl#K-0001;mark={mark};level={level}"
+    status = load(CONTRACTS / "kit-status-1" / "examples" / "status.json")
+    status["decisions"] = [{**status["decisions"][0], "mark": mark, "level": level}]
+
+    valid_citation = validator("kit-decision-1", "citation.schema.json").is_valid(citation)
+    valid_status = validator("kit-status-1", "status.schema.json").is_valid(status)
+    assert (valid_citation, valid_status) == (accepted, accepted)
+
+
 @pytest.mark.parametrize(("directory", "schema", "accepted"), [
     ("kit-aggregate-1", "aggregate.schema.json", ["aggregate.json", "aggregate-decided.json"]),
     ("kit-status-1", "status.schema.json", ["status.json"]),
